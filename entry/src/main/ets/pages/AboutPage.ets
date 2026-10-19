@@ -5,11 +5,18 @@
  * 现在独立成页，入口挂在「我的」一级页面的「关于」菜单里。
  */
 
+import { AppVersion } from '../common/AppVersion';
+
 @Component
 export struct AboutPage {
   navPathStack: NavPathStack = new NavPathStack();
 
-  private static readonly VERSION: string = '1.0.0';
+  /** 版本号统一走 AppVersion，见 common/AppVersion.ets 里的说明 */
+  @State private appVersion: string = '';
+
+  aboutToAppear(): void {
+    this.appVersion = AppVersion.value();
+  }
 
   /**
    * 使用说明：新用户最容易卡在「没加源就什么都搜不到」，
@@ -104,7 +111,9 @@ export struct AboutPage {
               .width('100%')
               .justifyContent(FlexAlign.Start)
 
-              Text('版本 ' + AboutPage.VERSION + ' · 多源聚合 · 点播 / 直播 / 离线下载')
+              Text(this.appVersion.length > 0
+                ? '版本 ' + this.appVersion + ' · 多源聚合 · 点播 / 直播 / 离线下载'
+                : '多源聚合 · 点播 / 直播 / 离线下载')
                 .fontSize(12)
                 .fontColor($r('app.color.color_text_secondary'))
                 .width('100%')

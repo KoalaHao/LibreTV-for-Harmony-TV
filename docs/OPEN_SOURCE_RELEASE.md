@@ -650,7 +650,7 @@ entry\build\default\outputs\default\entry-default-unsigned.hap
 
 ```powershell
 $src = "entry\build\default\outputs\default\entry-default-unsigned.hap"
-$dst = "$env:USERPROFILE\Desktop\LibreTV-HarmonyOS-v1.1.0-unsigned.hap"
+$dst = "$env:USERPROFILE\Desktop\LibreTV-HarmonyOS-v1.0.6-unsigned.hap"
 Copy-Item $src $dst
 Get-Item $dst | Select-Object Name, @{N='大小MB';E={[math]::Round($_.Length/1MB,2)}}
 ```
@@ -659,8 +659,8 @@ Get-Item $dst | Select-Object Name, @{N='大小MB';E={[math]::Round($_.Length/1M
 
 ```powershell
 $h = Get-FileHash $dst -Algorithm SHA256
-"$($h.Hash.ToLower())  LibreTV-HarmonyOS-v1.1.0-unsigned.hap" |
-  Out-File -Encoding ascii "$env:USERPROFILE\Desktop\LibreTV-HarmonyOS-v1.1.0-unsigned.hap.sha256"
+"$($h.Hash.ToLower())  LibreTV-HarmonyOS-v1.0.6-unsigned.hap" |
+  Out-File -Encoding ascii "$env:USERPROFILE\Desktop\LibreTV-HarmonyOS-v1.0.6-unsigned.hap.sha256"
 ```
 
 桌面上会多一个 `.sha256` 文件，下载的人可以用它核对文件有没有被篡改。
@@ -670,20 +670,20 @@ $h = Get-FileHash $dst -Algorithm SHA256
 在 PowerShell 里（项目目录下）：
 
 ```powershell
-git tag -a v1.1.0 -m "v1.1.0 - 首个开源版本"
-git push origin v1.1.0
+git tag -a v1.0.6 -m "v1.0.6 - 首个开源版本"
+git push origin v1.0.6
 ```
 
 **你会看到**：
 
 ```
 To https://github.com/你的用户名/LibreTV-HarmonyOS.git
- * [new tag]         v1.1.0 -> v1.1.0
+ * [new tag]         v1.0.6 -> v1.0.6
 ```
 
 > 💡 **不想用命令行？** 可以在网页上打 tag：仓库首页右侧 **Releases** →
-> **Draft a new release** → 在 "Choose a tag" 里**直接输入** `v1.1.0` →
-> 下面会出现 **"Create new tag: v1.1.0 on publish"** → 点它即可。
+> **Draft a new release** → 在 "Choose a tag" 里**直接输入** `v1.0.6` →
+> 下面会出现 **"Create new tag: v1.0.6 on publish"** → 点它即可。
 
 ### 9.5 创建 Release
 
@@ -694,9 +694,9 @@ To https://github.com/你的用户名/LibreTV-HarmonyOS.git
 
 | 字段 | 填什么 | 注意 |
 |---|---|---|
-| **Choose a tag** | 下拉选 `v1.1.0` | 第 9.4 步推上去的那个 |
+| **Choose a tag** | 下拉选 `v1.0.6` | 第 9.4 步推上去的那个 |
 | **Target** | `main` | 默认就是，不用改 |
-| **Release title** | `v1.1.0 — 首个开源版本` | 会显示成大标题 |
+| **Release title** | `v1.0.6 — 首个开源版本` | 会显示成大标题 |
 | **Describe this release** | 见下方模板 | 可以 Markdown |
 | **Set as the latest release** | ✅ 勾 | 让它在 Releases 页排最前 |
 | **Set as a pre-release** | ❌ 不勾 | 只有测试版才勾 |
@@ -716,8 +716,8 @@ To https://github.com/你的用户名/LibreTV-HarmonyOS.git
 
 | 文件 | 说明 |
 |---|---|
-| `LibreTV-HarmonyOS-v1.1.0-unsigned.hap` | **未签名**，需用自己的证书重签后安装，见 README「安装」章节 |
-| `LibreTV-HarmonyOS-v1.1.0-unsigned.hap.sha256` | SHA256 校验和 |
+| `LibreTV-HarmonyOS-v1.0.6-unsigned.hap` | **未签名**，需用自己的证书重签后安装，见 README「安装」章节 |
+| `LibreTV-HarmonyOS-v1.0.6-unsigned.hap.sha256` | SHA256 校验和 |
 
 > 为什么没有"直接能装"的包：HarmonyOS 侧载要求调试证书的 profile 里登记设备 UDID，
 > 作者无法为所有人的设备预先签名。详见 README。
@@ -746,7 +746,7 @@ To https://github.com/你的用户名/LibreTV-HarmonyOS.git
 https://github.com/你的用户名/LibreTV-HarmonyOS/releases
 ```
 
-**你应该看到**：一个大标题 `v1.1.0 — 首个开源版本`，下面是说明文字，
+**你应该看到**：一个大标题 `v1.0.6 — 首个开源版本`，下面是说明文字，
 最下方是 **Assets** 区域，列着两个文件，点文件名能直接下载。
 
 点一下 `.hap` 试试，能下载就成功了。
@@ -1110,8 +1110,8 @@ git remote add origin https://github.com/你的用户名/LibreTV-HarmonyOS.git
 git push -u origin main
 
 # 5. 打版本标签
-git tag -a v1.1.0 -m "v1.1.0 - 首个开源版本"
-git push origin v1.1.0
+git tag -a v1.0.6 -m "v1.0.6 - 首个开源版本"
+git push origin v1.0.6
 
 # ========== 以后日常更新 ==========
 git add -A

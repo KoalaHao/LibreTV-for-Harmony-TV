@@ -309,6 +309,11 @@ node "<DevEco>\tools\hvigor\bin\hvigorw.js" `
 
 产物：`entry/build/default/outputs/default/entry-default-signed.hap`
 
+> **版本号是自动的**：打包前会先跑 `scripts/version.js`，源码（`entry/src/main`）有改动就
+> 把版本号 +0.01（`1.0.6` → `1.0.7`），同一份代码重复打包不会虚增。
+> 唯一写版本号的地方是 `AppScope/app.json5`，界面两处都运行时读取它。
+> 只看不改：`node scripts\version.js --print`。
+
 ### 项目没有第三方依赖
 
 `oh-package.json5` 的 `dependencies` 是空的，首次同步很快。
@@ -321,6 +326,7 @@ node "<DevEco>\tools\hvigor\bin\hvigorw.js" `
 - 签名四件套、AGC 上架、27 项功能测试清单 → [TESTING_AND_RELEASE.md](TESTING_AND_RELEASE.md)
 - 源兼容性、网盘接入、线路选择可行性分析 → [docs/FEASIBILITY.md](docs/FEASIBILITY.md)
 - 零基础 GitHub 发布全流程（注册 → 建仓 → 认证 → 推送 → 装修 → 发 Release） → [docs/OPEN_SOURCE_RELEASE.md](docs/OPEN_SOURCE_RELEASE.md)
+- 用 GitHub Desktop 上传改动（装软件 → 提交 → 推送 + 脱敏自查清单） → [docs/GITHUB_DESKTOP_GUIDE.md](docs/GITHUB_DESKTOP_GUIDE.md)
 
 ---
 

@@ -39,6 +39,11 @@ local.properties
 .clang-format
 .clang-tidy
 
+# ---------- 版本号自动递增的本机状态 ----------
+# scripts/version.js 用它记住「上次打包时的源码指纹」，每台机器各自一份，
+# 提交上去会让别人第一次构建就平白多一个版本号
+scripts/.version-state.json
+
 # ---------- 开发过程杂物（截图、日志、一次性补丁脚本）----------
 dev/
 *.log

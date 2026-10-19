@@ -20,6 +20,7 @@ import { DetailCache } from '../model/DetailCache';
 import { NetImage } from '../components/NetImage';
 import { XmltvParser } from '../model/XmltvParser';
 import { Utils } from '../common/Utils';
+import { AppVersion } from '../common/AppVersion';
 import { EmptyView, LoadingView, SectionHeader, VodCard, SettingsRow } from '../components/CommonWidgets';
 import { SearchResultPage } from './SearchResultPage';
 import { SearchPageParam } from './SearchResultPage';
@@ -2036,9 +2037,11 @@ struct IndexPage {
               this.pushSettings();
             }
           })
+          // 版本号运行时读取（common/AppVersion），不要再写死字面量：
+          // 写死过 'v1.0.0'，结果「关于」页改了、这一行忘了改
           SettingsRow({
             rowTitle: '关于',
-            rowValue: 'v1.0.0',
+            rowValue: AppVersion.display(),
             onRowClick: () => {
               this.pushAbout();
             }

@@ -1,6 +1,6 @@
 # LibreTV 鸿蒙原生客户端 — 测试与发布指南
 
-适用版本：v1.0.0（versionCode 1000000）  
+适用版本：v1.0.6（versionCode 1100002）  
 目标平台：HarmonyOS NEXT（纯血鸿蒙，API 26，DevEco Studio 26.0.0）  
 工程根目录：`LibreTV-HarmonyOS/`
 
@@ -179,7 +179,7 @@ Build → Generate Key and CSR
 
 版本号规则（每次上架必改）：
 
-- `AppScope/app.json5` → `versionCode`：**必须递增的正整数**（本工程当前为 `1000000`，下次上架改 `1000001`……），AGC 拒绝相同或更低的 versionCode
+- `AppScope/app.json5` → `versionCode`：**必须递增的正整数**（本工程当前为 `1100001`，下次上架改 `1100002`……），AGC 拒绝相同或更低的 versionCode
 - `versionName`：语义化版本，如 `1.0.0`、`1.1.0`
 
 ---
