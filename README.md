@@ -320,7 +320,7 @@ node "<DevEco>\tools\hvigor\bin\hvigorw.js" `
 - 工程结构、模块划分 → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 签名四件套、AGC 上架、27 项功能测试清单 → [TESTING_AND_RELEASE.md](TESTING_AND_RELEASE.md)
 - 源兼容性、网盘接入、线路选择可行性分析 → [docs/FEASIBILITY.md](docs/FEASIBILITY.md)
-- 把这个项目发布到 GitHub 的完整流程 → [docs/OPEN_SOURCE_RELEASE.md](docs/OPEN_SOURCE_RELEASE.md)
+- 零基础 GitHub 发布全流程（注册 → 建仓 → 认证 → 推送 → 装修 → 发 Release） → [docs/OPEN_SOURCE_RELEASE.md](docs/OPEN_SOURCE_RELEASE.md)
 
 ---
 
