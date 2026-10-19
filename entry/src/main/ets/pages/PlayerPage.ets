@@ -130,6 +130,28 @@ export struct PlayerPage {
   /** 浮层延迟消失的定时器 */
   private adjustTimer: number = -1;
 
+  // ---------- 自动换源（加载超时 / 反复卡顿）----------
+  /** 起播看门狗：起播后 12 秒仍没进入 playing，判定这一路加载失败 */
+  private loadWatchdog: number = -1;
+  /** 本次起播累计的真卡顿次数，达到阈值自动换源 */
+  private stallCount: number = 0;
+  /** 自动换源流程进行中：防止看门狗与卡顿判定同时触发导致连切 */
+  private autoSwitching: boolean = false;
+  /** 已经自动试过的源：避免在几个坏源之间来回跳 */
+  private autoTried: string[] = [];
+  /** 起播超时阈值（毫秒）。8 秒太激进：弱网下起播常要 10 秒左右，
+   *  看门狗先触发、测速期间画面又起来了，就出现「刚播起来又跳走」 */
+  private static readonly LOAD_TIMEOUT_MS: number = 12000;
+  /** 最近一次「进度真正前进」的时间：判断播放是否已经恢复，比 playing 可靠
+   *  （卡顿时 playing 仍是 true，只有进度停了） */
+  private lastProgressAt: number = 0;
+  /** 最近一次真卡顿的时间：用于「平稳播放 60 秒后把卡顿账清零」 */
+  private lastStallAt: number = 0;
+  /** 同一集卡顿多少次后自动换源 */
+  private static readonly STALL_LIMIT: number = 3;
+  /** 一次播放最多自动换几次源，超了就交回给用户 */
+  private static readonly AUTO_SWITCH_MAX: number = 3;
+
   aboutToAppear(): void {
     // 播放页存活期间保持屏幕常亮：平板全屏播放时系统休眠计时一到会直接黑屏锁屏
     ScreenKeeper.acquirePlayback();
@@ -159,6 +181,7 @@ export struct PlayerPage {
     ScreenKeeper.releasePlayback();
     this.releaseCastSession();
     this.clearStall();
+    this.clearWatchdog();
     this.saveProgress();
     // 不管从哪个入口离开（返回键 / 系统返回手势 / 自动连播结束），都要把屏幕方向
     // 交还系统（不是锁竖屏！）、并把窗口布局全屏复原，否则主界面会转不动 / 被裁掉底部。
@@ -192,6 +215,12 @@ export struct PlayerPage {
       // 进度在推进 = 没有卡顿：取消预约的检查并收掉加载圈
       if (positionMs > this.lastPosMs) {
         this.lastPosMs = positionMs;
+        this.lastProgressAt = Date.now();
+        // 距上次卡顿已平稳播放 60 秒：旧账清零。
+        // 否则一小时里零散卡三次也会被判成「反复卡顿」而换源。
+        if (this.stallCount > 0 && this.lastStallAt > 0 && this.lastProgressAt - this.lastStallAt > 60000) {
+          this.stallCount = 0;
+        }
         if (this.stallTimer >= 0 || this.stallLoading) {
           this.clearStall();
         }
@@ -212,6 +241,7 @@ export struct PlayerPage {
       if (playing) {
         this.hasStarted = true;
         this.clearStall();
+        this.clearWatchdog();
         this.scheduleHideControls();
         // 只有真正进入 playing 才应用倍速；1.0 倍速是默认值，不必调用，避免无谓报错
         if (!this.speedApplied) {
@@ -238,6 +268,7 @@ export struct PlayerPage {
       this.errorText = message;
       this.buffering = false;
       this.clearStall();
+      this.clearWatchdog();
     };
     this.player.onBuffering = (percent: number) => {
       this.buffering = percent < 100;
@@ -277,6 +308,12 @@ export struct PlayerPage {
       }
       if (Date.now() - this.lastPosAt >= 900) {
         this.stallLoading = true;
+        this.stallCount++;
+        this.lastStallAt = Date.now();
+        // 同一集反复卡 3 次以上：别让用户一直盯着转圈，换延时最小的源
+        if (this.stallCount >= PlayerPage.STALL_LIMIT) {
+          this.onPlaybackHang();
+        }
       }
     }, 1000);
   }
@@ -513,6 +550,14 @@ export struct PlayerPage {
     this.clearLoadingTimer();
     this.clearStall();
     this.lastPosMs = 0;
+    this.lastProgressAt = 0;
+    this.stallCount = 0;
+    this.lastStallAt = 0;
+    this.clearWatchdog();
+    // 离线播放只有本地一份文件，没有别的源可换，不必起表
+    if (this.offlineDir === '') {
+      this.startWatchdog();
+    }
     if (this.offlineDir !== '') {
       this.starting = true;
       // 离线缓存交付的是合并好的整文件 video.ts。
@@ -743,14 +788,28 @@ export struct PlayerPage {
   }
 
   private async switchSource(item: SpeedTestItem): Promise<void> {
+    const done: boolean = await this.applySource(item, false);
+    if (done) {
+      // 手动换源是用户的主动选择：给自动换源重新记一份预算
+      this.autoTried = [];
+      this.stallCount = 0;
+    }
+  }
+
+  /** 真正执行换源；fromAuto=true 时失败不弹 toast，由自动流程自己给文案 */
+  private async applySource(item: SpeedTestItem, fromAuto: boolean): Promise<boolean> {
     if (!item.ok || item.vodId === undefined || item.vodId === '') {
-      this.toast('该源当前不可用');
-      return;
+      if (!fromAuto) {
+        this.toast('该源当前不可用');
+      }
+      return false;
     }
     const source = SourceManager.shared().getVodSource(item.sourceKey);
     if (source === null) {
-      this.toast('该源已被删除');
-      return;
+      if (!fromAuto) {
+        this.toast('该源已被删除');
+      }
+      return false;
     }
     let detail: VideoDetail | null = null;
     try {
@@ -759,8 +818,10 @@ export struct PlayerPage {
       detail = null;
     }
     if (detail === null || detail.episodes.length === 0) {
-      this.toast('切换失败：该源没有分集信息');
-      return;
+      if (!fromAuto) {
+        this.toast('切换失败：该源没有分集信息');
+      }
+      return false;
     }
     this.showSources = false;
     this.sourceKey = item.sourceKey;
@@ -777,6 +838,112 @@ export struct PlayerPage {
     this.positionText = Utils.formatTime(this.positionMs);
     this.sliderValue = Math.floor(this.positionMs / 1000);
     this.startPlay();
+    return true;
+  }
+
+  /** 起播看门狗：12 秒还没出画面，就当这一路加载失败 */
+  private startWatchdog(): void {
+    this.clearWatchdog();
+    this.loadWatchdog = setTimeout(() => {
+      this.loadWatchdog = -1;
+      if (this.released || this.hasStarted || this.errorText !== '') {
+        return;
+      }
+      this.onPlaybackHang();
+    }, PlayerPage.LOAD_TIMEOUT_MS);
+  }
+
+  private clearWatchdog(): void {
+    if (this.loadWatchdog >= 0) {
+      clearTimeout(this.loadWatchdog);
+      this.loadWatchdog = -1;
+    }
+  }
+
+  /**
+   * 播放不畅的统一入口：加载超时（12 秒没画面）或同一集真卡顿 3 次。
+   * 处理方式是自动换到「延时最小的其他点播源」，并从当前进度续播。
+   */
+  private onPlaybackHang(): void {
+    if (this.released || this.autoSwitching) {
+      return;
+    }
+    // 近 1.5 秒内进度还在走 = 播放正常，别换源。
+    // 判据用「进度」而不是 playing：卡顿时 playing 依然为 true。
+    if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 1500) {
+      return;
+    }
+    this.showLoading = false;
+    this.clearStall();
+    if (this.offlineDir !== '') {
+      // 离线只有本地一份文件，换不了源
+      if (this.errorText === '') {
+        this.errorText = '本地文件播放失败，请重新下载';
+      }
+      return;
+    }
+    this.autoSwitchSource();
+  }
+
+  private async autoSwitchSource(): Promise<void> {
+    if (this.autoSwitching || this.released) {
+      return;
+    }
+    if (this.title === '') {
+      this.errorText = '播放失败，请稍后重试';
+      return;
+    }
+    if (this.autoTried.length >= PlayerPage.AUTO_SWITCH_MAX) {
+      this.errorText = '已自动尝试多个片源仍无法播放，请手动换源';
+      return;
+    }
+    this.autoSwitching = true;
+    this.clearWatchdog();
+    this.showLoading = true;
+    this.toast('播放不畅，正在自动切换片源…');
+    try {
+      // 返回结果已按延迟升序排列：第一个可用的就是延时最小的
+      const items: SpeedTestItem[] = await SearchService.speedTest(this.title, this.sourceKey, this.settings);
+      // 关键：测速要花几秒，这段时间画面可能已经恢复正常。
+      // 不复查就切，用户看到的就是「刚播起来又被换走」。
+      if (this.released) {
+        return;
+      }
+      if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 2000) {
+        this.showLoading = false;
+        return;
+      }
+      let picked: SpeedTestItem | null = null;
+      for (const it of items) {
+        if (!it.ok || it.vodId === undefined || it.vodId === '') {
+          continue;
+        }
+        if (it.sourceKey === this.sourceKey || this.autoTried.indexOf(it.sourceKey) >= 0) {
+          continue;
+        }
+        picked = it;
+        break;
+      }
+      if (picked === null) {
+        this.showLoading = false;
+        this.errorText = '没有找到可用的备用片源，请手动换源';
+        return;
+      }
+      const pickedName: string = picked.sourceName;
+      this.autoTried.push(picked.sourceKey);
+      const done: boolean = await this.applySource(picked, true);
+      if (done) {
+        this.toast('已切换到「' + pickedName + '」');
+      } else {
+        this.showLoading = false;
+        this.errorText = '备用片源也无法播放，请手动换源';
+      }
+    } catch (e) {
+      this.showLoading = false;
+      this.errorText = '自动换源失败，请手动换源';
+    } finally {
+      this.autoSwitching = false;
+    }
   }
 
   /** Area 里的 Length 可能是 number 也可能是字符串，统一取数值（vp） */

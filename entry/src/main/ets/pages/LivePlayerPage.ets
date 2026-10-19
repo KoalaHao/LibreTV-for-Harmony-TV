@@ -47,6 +47,11 @@ export struct LivePlayerPage {
 
   @State playing: boolean = false;
   @State errorText: string = '';
+  /** 连续重试失败次数：点两次仍失败就退回列表，不再让用户干点第三次 */
+  private retryCount: number = 0;
+  /** 已经在退回列表的路上：播放器一次失败可能连发多个 onError，防重复弹窗/重复 pop */
+  private leaving: boolean = false;
+  private static readonly RETRY_LIMIT: number = 2;
   @State favorite: boolean = false;
   @State controlsVisible: boolean = true;
   @State epgNow: string = '';
@@ -171,6 +176,7 @@ export struct LivePlayerPage {
       this.clearStall();
       if (playing) {
         this.hasStarted = true;
+        this.retryCount = 0;
         this.scheduleHideControls();
       }
     };
@@ -188,6 +194,11 @@ export struct LivePlayerPage {
       this.showLoading = false;
       this.clearLoadingTimer();
       this.clearStall();
+      // 点过两次重试还是起不来：这个频道基本可以判死刑，
+      // 直接退回频道列表，比让用户继续点第三次更体面
+      if (this.retryCount >= LivePlayerPage.RETRY_LIMIT) {
+        this.returnToListWithHint();
+      }
     };
     this.player.onBuffering = (percent: number) => {
       if (percent >= 100) {
@@ -419,6 +430,24 @@ export struct LivePlayerPage {
     this.navPathStack.pop();
   }
 
+  /**
+   * 连续两次重试仍失败：提示后自动退回频道列表。
+   * 留 260ms 再 pop，是为了让 toast 先挂上去 —— 立刻 pop 会把提示一起带走。
+   */
+  private returnToListWithHint(): void {
+    if (this.leaving) {
+      return;
+    }
+    this.leaving = true;
+    this.getUIContext().getPromptAction().showToast({
+      message: '该频道当前不可用，请尝试其他频道',
+      duration: 2600
+    });
+    setTimeout(() => {
+      this.back();
+    }, 260);
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Center }) {
@@ -478,6 +507,7 @@ export struct LivePlayerPage {
                 .fontSize(14)
                 .backgroundColor($r('app.color.color_primary'))
                 .onClick(() => {
+                  this.retryCount++;
                   this.errorText = '';
                   this.startPlay();
                 })
