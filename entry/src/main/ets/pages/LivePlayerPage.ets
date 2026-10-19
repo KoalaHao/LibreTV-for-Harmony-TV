@@ -46,7 +46,6 @@ export struct LivePlayerPage {
   private channelIds: Map<string, string> = new Map<string, string>();
 
   @State playing: boolean = false;
-  @State buffering: boolean = true;
   @State errorText: string = '';
   @State favorite: boolean = false;
   @State controlsVisible: boolean = true;
@@ -62,11 +61,22 @@ export struct LivePlayerPage {
   /** 按原始比例算出的画面尺寸（vp），居中显示不拉伸 */
   @State displayW: number = 0;
   @State displayH: number = 0;
+  /**
+   * 画面铺满（裁切黑边）模式，与点播页同一套语义：
+   * 保持比例、取较大的缩放，超出容器的部分出画，不变形。
+   * 直播流常见 16:9，在更宽的平板/车机上会有左右黑边，铺满后能去掉。
+   */
+  @State fitCover: boolean = false;
   @State hasStarted: boolean = false;
   @State showLoading: boolean = true;
   /** 起播后真卡顿（缓冲持续超过 1.2 秒）时屏幕中央的加载圈 */
   @State stallLoading: boolean = false;
   private stallTimer: number = -1;
+  /** 直播流播放进度采样：卡顿判定只看「进度是否还在前进」 */
+  private lastPosMs: number = 0;
+  private lastProgressAt: number = 0;
+  /** 是否收到过进度回调；一次都没有的流无法判断卡顿，宁可不弹圈 */
+  private progressSeen: boolean = false;
 
   aboutToAppear(): void {
     // 播放页存活期间保持屏幕常亮：平板全屏播放时系统休眠计时一到会直接黑屏锁屏
@@ -88,9 +98,24 @@ export struct LivePlayerPage {
     this.release();
   }
 
-  /** 起播后卡顿：预约 1.2 秒后仍处于缓冲才弹加载圈（只预约一次） */
+  /**
+   * 起播后卡顿判定：只在「播放进度连续 1 秒没有前进」时才弹加载圈。
+   *
+   * 早期版本判据是 `this.buffering`，直播必然误报：直播是滑动窗口，
+   * BUFFERING_PERCENT 几乎永远到不了 100，于是任何一次 bufferingUpdate
+   * 都会让 1.2 秒后弹出「缓冲中」；而直播页又没有进度回调去清它、
+   * 播放状态也不再变化 —— 加载圈从此一直挂着。
+   * 症状正是「画面正常播放，中央却一直转圈」。
+   *
+   * 改为采样进度后，只要 timeUpdate 还在前进就会立刻收圈（见 onProgress），
+   * 真卡住才会留下。
+   */
   private scheduleStallCheck(): void {
     if (this.stallTimer >= 0 || this.released) {
+      return;
+    }
+    // 一次进度都没收到过（个别流不报 timeUpdate）：无法判断，不出圈更安全
+    if (!this.progressSeen) {
       return;
     }
     this.stallTimer = setTimeout(() => {
@@ -98,7 +123,8 @@ export struct LivePlayerPage {
       if (this.released || !this.hasStarted) {
         return;
       }
-      if (this.buffering) {
+      // 距离上次进度前进已超过 1 秒 = 真的卡住了
+      if (Date.now() - this.lastProgressAt >= 1000) {
         this.stallLoading = true;
       }
     }, 1200);
@@ -117,14 +143,34 @@ export struct LivePlayerPage {
   }
 
   private bindCallbacks(): void {
+    // 直播流同样会上报 timeUpdate。进度在走就说明画面在正常播放，
+    // 这是「缓冲中」误显示的唯一可靠解药：只要进度前进，立刻收圈并取消预约检查。
+    this.player.onProgress = (positionMs: number) => {
+      if (positionMs <= this.lastPosMs) {
+        return;
+      }
+      this.lastPosMs = positionMs;
+      this.lastProgressAt = Date.now();
+      this.progressSeen = true;
+      // 进度都动了，必然已起播：兜住个别机型不发 playing 状态的情况
+      this.hasStarted = true;
+      if (this.showLoading) {
+        this.showLoading = false;
+        this.clearLoadingTimer();
+      }
+      if (this.stallTimer >= 0 || this.stallLoading) {
+        this.clearStall();
+      }
+    };
     this.player.onPlayStateChanged = (playing: boolean) => {
       this.playing = playing;
-      this.buffering = false;
       this.showLoading = false;
       this.clearLoadingTimer();
+      // 播放状态已经明确变化（含用户手动暂停）：旧的卡顿判定作废，
+      // 否则「卡顿中按暂停」会让加载圈一直挂着不走。
+      this.clearStall();
       if (playing) {
         this.hasStarted = true;
-        this.clearStall();
         this.scheduleHideControls();
       }
     };
@@ -139,13 +185,11 @@ export struct LivePlayerPage {
       } else {
         this.errorText = message;
       }
-      this.buffering = false;
       this.showLoading = false;
       this.clearLoadingTimer();
       this.clearStall();
     };
     this.player.onBuffering = (percent: number) => {
-      this.buffering = percent < 100;
       if (percent >= 100) {
         this.clearLoadingTimer();
         this.showLoading = false;
@@ -155,8 +199,9 @@ export struct LivePlayerPage {
         this.showLoading = true;
         return;
       }
-      // 直播流水位几乎永远 <100%，不能按水位直接弹（会一直转）。
-      // 改用「缓冲持续超过 1.2 秒仍没恢复」判定真卡顿，再弹加载圈。
+      // 直播流水位几乎永远 <100%，绝不能按水位直接弹圈 ——
+      // 那正是「画面正常播放，中央一直转圈」的成因。
+      // 这里只做「预约」，真正的判据是播放进度是否停摆（见 scheduleStallCheck）。
       if (this.playing) {
         this.scheduleStallCheck();
       }
@@ -215,10 +260,15 @@ export struct LivePlayerPage {
     }
     this.starting = true;
     this.errorText = '';
-    this.buffering = true;
     this.hasStarted = false;
     this.showLoading = true;
     this.clearLoadingTimer();
+    // 换台/重试：进度采样归零。否则上一路流已经跑到的较大进度会让新流的
+    // 小进度永远不满足「比上次大」，卡顿检测与收圈路径全部失效。
+    this.lastPosMs = 0;
+    this.lastProgressAt = 0;
+    this.progressSeen = false;
+    this.clearStall();
     const headers = PlayUrlResolver.headersFor(this.channelUrl);
     await this.player.playUrl(this.channelUrl, headers, 0);
     this.starting = false;
@@ -293,6 +343,18 @@ export struct LivePlayerPage {
     }
     const videoRatio: number = this.videoW / this.videoH;
     const canvasRatio: number = this.canvasW / this.canvasH;
+    if (this.fitCover) {
+      // 铺满（裁切）：保持比例取较大缩放，超出容器的部分出画。
+      // 画面不变形，只是左右或上下裁掉一点 —— 与点播页 PlayerPage 算法一致。
+      if (videoRatio > canvasRatio) {
+        this.displayH = this.canvasH;
+        this.displayW = this.canvasH * videoRatio;
+      } else {
+        this.displayW = this.canvasW;
+        this.displayH = this.canvasW / videoRatio;
+      }
+      return;
+    }
     if (videoRatio > canvasRatio) {
       this.displayW = this.canvasW;
       this.displayH = this.canvasW / videoRatio;
@@ -483,6 +545,23 @@ export struct LivePlayerPage {
               .onClick(() => {
                 this.startPlay();
               })
+              // 与点播页一致：横屏下提供「铺满屏 / 适应屏」切换，
+              // 16:9 直播流在更宽的平板上会留左右黑边，铺满后能去掉
+              if (this.canvasW > this.canvasH) {
+                Text(this.fitCover ? '适应屏' : '铺满屏')
+                  .fontSize(13)
+                  .fontColor('#FFFFFF')
+                  .backgroundColor('#26FFFFFF')
+                  .borderRadius(17)
+                  .height(34)
+                  .padding({ left: 13, right: 13 })
+                  .textAlign(TextAlign.Center)
+                  .maxLines(1)
+                  .onClick(() => {
+                    this.fitCover = !this.fitCover;
+                    this.updateSurfaceSize();
+                  })
+              }
               Stack({ alignContent: Alignment.Center }) {
                 Image($r('app.media.ic_player_fullscreen'))
                   .width(18)
@@ -582,6 +661,11 @@ export struct LivePlayerPage {
         if (w > 0 && h > 0 && (w !== this.canvasW || h !== this.canvasH)) {
           this.canvasW = w;
           this.canvasH = h;
+          // 切回竖屏必须退出「铺满」：16:9 的流铺进竖屏会被裁到只剩中间一条，
+          // 而竖屏下按钮是隐藏的，用户没有退路。
+          if (this.fitCover && w <= h) {
+            this.fitCover = false;
+          }
           this.updateSurfaceSize();
         }
       })

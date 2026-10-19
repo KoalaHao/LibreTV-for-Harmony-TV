@@ -1603,6 +1603,11 @@ export struct PlayerPage {
         if (w > 0 && h > 0 && (w !== this.canvasW || h !== this.canvasH)) {
           this.canvasW = w;
           this.canvasH = h;
+          // 切回竖屏必须退出「铺满」：16:9 的流铺进竖屏会被裁到只剩中间一条，
+          // 而竖屏下「铺满屏」按钮是隐藏的，用户没有退路。
+          if (this.fitCover && w <= h) {
+            this.fitCover = false;
+          }
           this.updateSurfaceSize();
         }
       })
