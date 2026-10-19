@@ -1,0 +1,28 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "LibreTV native client"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "LibreTV"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "LibreTV 原生客户端"
+    },
+    {
+      "name": "permission_internet_reason",
+      "value": "需要访问网络以搜索视频源并播放在线流媒体"
+    },
+    {
+      "name": "permission_network_reason",
+      "value": "需要检测网络状态以便在离线时给出提示"
+    },
+    {
+      "name": "permission_camera_reason",
+      "value": "需要使用相机扫描二维码以导入订阅或播放列表"
+    }
+  ]
+}

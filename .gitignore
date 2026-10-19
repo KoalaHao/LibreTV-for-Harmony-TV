@@ -1,0 +1,51 @@
+# ---------- 构建产物 ----------
+/build/
+/entry/build/
+/entry/.preview/
+/entry/.test/
+.hvigor/
+oh_modules/
+node_modules/
+*.hap
+*.app
+*.hsp
+*.har
+.cxx
+.appanalyzer
+*.tsbuildinfo
+
+# ---------- 签名材料（绝对不能提交）----------
+.ohos/
+*.p12
+*.cer
+*.p7b
+*.csr
+*.keystore
+*.jks
+signingConfigs.json
+
+# ---------- IDE / 编辑器 ----------
+.idea/
+.vscode/
+*.iml
+.codegenie/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本地配置 ----------
+local.properties
+.clangd
+.clang-format
+.clang-tidy
+
+# ---------- 开发过程杂物（截图、日志、一次性补丁脚本）----------
+dev/
+*.log
+*.log.*
+patch_*.py
+_patch_*.py
+_*.py
+_*.json
+_*.txt
+verify_*.png

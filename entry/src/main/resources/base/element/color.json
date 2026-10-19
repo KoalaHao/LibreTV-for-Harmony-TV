@@ -1,0 +1,56 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#F5F5F7"
+    },
+    {
+      "name": "color_primary",
+      "value": "#E5484D"
+    },
+    {
+      "name": "color_primary_dark",
+      "value": "#C23338"
+    },
+    {
+      "name": "color_bg",
+      "value": "#F5F5F7"
+    },
+    {
+      "name": "color_card",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "color_text",
+      "value": "#1A1A1E"
+    },
+    {
+      "name": "color_text_secondary",
+      "value": "#8E8E96"
+    },
+    {
+      "name": "color_divider",
+      "value": "#E4E4E8"
+    },
+    {
+      "name": "color_chip_bg",
+      "value": "#ECECF1"
+    },
+    {
+      "name": "color_success",
+      "value": "#2BA471"
+    },
+    {
+      "name": "color_caption_bg",
+      "value": "#D8DDE6"
+    },
+    {
+      "name": "color_player_scrim",
+      "value": "#FFFFFFB8"
+    },
+    {
+      "name": "color_warning",
+      "value": "#D9822B"
+    }
+  ]
+}
