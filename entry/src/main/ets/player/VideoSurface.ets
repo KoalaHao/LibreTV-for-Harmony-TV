@@ -5,7 +5,13 @@
 
 @Component
 export struct VideoSurface {
-  private xController: XComponentController = new XComponentController();
+  /**
+   * XComponent 控制器。由页面持有并传入，不是这里自己 new 的 ——
+   * 画中画创建时 PiPWindow.create() 必须拿到**正在显示视频的那个** XComponent 的
+   * 控制器（config.componentController），拿不到就起不了画中画。
+   * 类型必须是 XComponentType.SURFACE，系统要靠 Surface 把小窗画面接走。
+   */
+  controller: XComponentController = new XComponentController();
   /**
    * 画面宽高（vp）。AVPlayer 会把视频直接渲染到 Surface 上，
    * 若 Surface 尺寸与视频原始比例不一致，画面就会被拉伸 —— 这正是「视频比例被拉扁」的根因。
@@ -21,13 +27,13 @@ export struct VideoSurface {
   build() {
     XComponent({
       type: XComponentType.SURFACE,
-      controller: this.xController
+      controller: this.controller
     })
       .width(this.surfaceWidth > 0 ? this.surfaceWidth : '100%')
       .height(this.surfaceHeight > 0 ? this.surfaceHeight : '100%')
       .backgroundColor(Color.Black)
       .onLoad(() => {
-        const surfaceId: string = this.xController.getXComponentSurfaceId();
+        const surfaceId: string = this.controller.getXComponentSurfaceId();
         this.onSurfaceReady(surfaceId);
       })
       .onDestroy(() => {

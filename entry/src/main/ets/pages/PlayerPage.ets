@@ -3,7 +3,7 @@
  */
 
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { window } from '@kit.ArkUI';
+import { window, PiPWindow } from '@kit.ArkUI';
 import { AvPlayerController, PlaybackSpeedOption } from '../player/AvPlayerController';
 import { DevicePolicy } from '../common/DevicePolicy';
 import { audio, AVVolumePanel } from '@kit.AudioKit';
@@ -21,6 +21,10 @@ import { DownloadManager } from '../data/DownloadManager';
 import { Episode, SpeedTestItem, Settings, VideoDetail, PlayRecord } from '../model/Types';
 import { Utils } from '../common/Utils';
 import { LocalHttpServer } from '../common/LocalHttpServer';
+import { NavIds } from '../common/NavIds';
+import { AppLifecycle } from '../common/AppLifecycle';
+import { Brand } from '../common/Brand';
+import { latestNavParam } from '../common/NavParam';
 
 export interface PlayerPageParam {
   sourceKey: string;
@@ -42,13 +46,20 @@ export interface PlayerPageParam {
 @Component
 export struct PlayerPage {
   navPathStack: NavPathStack = new NavPathStack();
-  sourceKey: string = '';
+  /**
+   * 下面这四项会直接渲染到界面上（左上角片名、集名、源名、"离线缓存"标记），
+   * 所以必须是 @State：Navigation 复用缓存节点时页面不会重建，
+   * onPageShown 里改用新参数赋值时，普通字段不会触发重绘 ——
+   * 症状就是「换了一部片子续播，左上角还挂着上一部的名字，
+   * 要等起播后点一下屏幕才更新」。
+   */
+  @State sourceKey: string = '';
   vodId: string = '';
   episode: number = 0;
-  episodeName: string = '';
-  title: string = '';
+  @State episodeName: string = '';
+  @State title: string = '';
   positionMs: number = 0;
-  offlineDir: string = '';
+  @State offlineDir: string = '';
   /** 调用方已知的当前集播放地址；优先使用，避免再次请求详情被源站限流 */
   episodeUrl: string = '';
   /** 调用方已知的海报地址；用于给「继续观看」补封面 */
@@ -195,9 +206,34 @@ export struct PlayerPage {
   private static readonly RESYNC_LIMIT: number = 5;
   private static readonly RESYNC_AFTER_MS: number = 4000;
 
+  // ---------- 画中画（回桌面 / 开别的 App 时自动缩小）----------
+  /** 交给 VideoSurface 的 XComponent 控制器：创建画中画必须把它传给 PiPWindow */
+  private xController: XComponentController = new XComponentController();
+  private pipController: PiPWindow.PiPController | null = null;
+  /** 正在创建控制器：避免 onSurfaceReady 与 videoSizeChange 并发各建一个 */
+  private pipCreating: boolean = false;
+  /** 画中画窗口是否真的在显示（由 stateChange 维护） */
+  private pipActive: boolean = false;
+  /**
+   * 小窗是「本页主动叫停」的（回前台恢复全屏 / 离开页面），不是用户关掉小窗。
+   * 必须自己记：应用主动 stopPiP 时系统回报的 reason 也是 'requestDelete'，
+   * 与「用户点小窗关闭」完全同义 —— 不区分就会在恢复全屏那一刻把播放暂停掉。
+   */
+  private pipStopBySelf: boolean = false;
+  /** 停小窗之前是否正在播放：恢复全屏后要接着播，而不是停在那一帧等人再点一次 */
+  private pipWasPlaying: boolean = false;
+  /** 创建失败过就不再重试：不支持画中画的设备每次进播放页都试一遍纯属浪费 */
+  private pipUnsupported: boolean = false;
+  /** XComponent 是否已就绪过：用来区分「首次起播」和「画面重建」 */
+  private surfaceReady: boolean = false;
+  /** 回桌面后的宽限计时：等系统把画中画拉起来 */
+  private bgTimer: number = -1;
+  /** 屏幕常亮是否由本页持有：重复进出必须配对，否则会一直亮屏 */
+  private screenHeld: boolean = false;
+
   aboutToAppear(): void {
     // 播放页存活期间保持屏幕常亮：平板全屏播放时系统休眠计时一到会直接黑屏锁屏
-    ScreenKeeper.acquirePlayback();
+    this.holdScreen();
     this.syncSystemVolume();
     this.initCastSession();
     const hostCtx = this.getUIContext().getHostContext();
@@ -208,6 +244,10 @@ export struct PlayerPage {
     this.speedValue = this.settings.defaultSpeed;
     this.positionText = Utils.formatTime(this.positionMs);
     this.bindCallbacks();
+    // 前后台变化回调：判断画中画有没有接管，没接管就得自己停住
+    AppLifecycle.bgHandler = (background: boolean) => {
+      this.handleAppBackground(background);
+    };
     if (hostCtx !== undefined) {
       window.getLastWindow(hostCtx).then((win: window.Window) => {
         this.win = win;
@@ -221,23 +261,209 @@ export struct PlayerPage {
   }
 
   aboutToDisappear(): void {
+    // 每一件清理都单独包一层：以前是一串裸调用，前面任何一步抛错，
+    // 后面的「交还窗口布局」「释放播放器」就整段被跳过 ——
+    // 症状正是「已经回到列表，界面却顶到状态栏底下、声音还在放」。
+    this.safeStep('unbindLifecycle', () => {
+      AppLifecycle.bgHandler = () => {
+        // 页面已离开，不再关心前后台
+      };
+    });
+    this.safeStep('screen', () => {
+      this.dropScreen();
+    });
+    this.safeStep('cast', () => {
+      this.releaseCastSession();
+    });
+    this.safeStep('stall', () => {
+      this.clearStall();
+    });
+    this.safeStep('watchdog', () => {
+      this.clearWatchdog();
+    });
+    this.safeStep('save', () => {
+      this.saveProgress();
+    });
+    // 这两件最要紧：窗口状态必须交还，播放器必须释放
+    this.safeStep('window', () => {
+      this.restoreWindowState();
+    });
+    this.safeStep('brightness', () => {
+      // 窗口亮度是「霸占式」的：不还原的话，控制中心里调系统亮度会一直失效
+      this.restoreBrightness();
+    });
+    this.safeStep('adjust', () => {
+      this.clearAdjustTimer();
+    });
+    this.safeStep('release', () => {
+      this.release();
+    });
+    this.safeStep('offline', () => {
+      // 离线播放用的本地服务只在这一页需要，离开就关掉，别一直占着端口
+      if (this.offlineDir !== '') {
+        LocalHttpServer.shared().stop();
+      }
+    });
+  }
+
+  /** 清理动作逐个隔离：一步失败不能连累后面的步骤 */
+  private safeStep(name: string, step: () => void): void {
+    try {
+      step();
+    } catch (e) {
+      // 清理阶段拿不到 UIContext、会话已销毁之类都会走到这里，留一条便于定位
+      console.warn('[player] cleanup failed at ' + name);
+    }
+  }
+
+  /** 持有屏幕常亮（幂等）：本例只持有一份，重复调用不会把系统计数堆起来 */
+  private holdScreen(): void {
+    if (this.screenHeld) {
+      return;
+    }
+    this.screenHeld = true;
+    ScreenKeeper.acquirePlayback();
+  }
+
+  /** 交还屏幕常亮（幂等） */
+  private dropScreen(): void {
+    if (!this.screenHeld) {
+      return;
+    }
+    this.screenHeld = false;
     ScreenKeeper.releasePlayback();
-    this.releaseCastSession();
+  }
+
+  /**
+   * NavDestination 的 onShown：**只处理「缓存节点被再次复用」这一种情况**。
+   *
+   * Navigation 按路由名缓存 NavDestination 节点，pop 之后再 push 同一个路由名，
+   * 框架直接复用缓存节点 —— 组件实例不重建、aboutToAppear 不再执行、XComponent
+   * 也不再 onLoad。上一次留下的东西全是死的：
+   *   - released / playing 停在旧值 → 竖屏、画面停在最后一帧、中央挂着暂停按钮，
+   *     点它还毫无反应（播放器早已释放，toggle() 直接返回）；
+   *   - 参数还是上一部的 → 换一部片子进来播的还是上一部。
+   * 这里把一次性状态归零，再用缓存节点上还活着的 Surface 重建播放器。
+   *
+   * 判据用 released：离开本页一定走 release()（back 与 aboutToDisappear 两条路都调），
+   * 首次进入以及「从后台回前台」时 released 都是 false，不会被误判成再次进入。
+   */
+  private onPageShown(): void {
+    if (!this.released) {
+      return;
+    }
+    this.applyParamFromStack();
+    this.resetForReentry();
+    // 缓存节点复用时 onSurfaceReady 不会再触发，窗口这两件事必须自己补上
+    this.applyWindowFullScreen(true);
+    this.setLandscape(true);
+    this.resumePlayback(3);
+  }
+
+  /** 从路由栈取最新参数：缓存节点复用后，构造时传入的字段还是旧的 */
+  private applyParamFromStack(): void {
+    const raw: Object | null = latestNavParam(this.navPathStack, 'Player');
+    if (raw === null) {
+      return;
+    }
+    const p: PlayerPageParam = raw as PlayerPageParam;
+    this.sourceKey = p.sourceKey;
+    this.vodId = p.vodId;
+    this.episode = p.episode;
+    this.episodeName = p.episodeName;
+    this.title = p.title;
+    this.positionMs = p.positionMs;
+    this.offlineDir = p.offlineDir;
+    this.episodeUrl = p.episodeUrl !== undefined ? p.episodeUrl : '';
+    this.pic = p.pic !== undefined ? p.pic : '';
+    this.lineIndex = p.lineIndex !== undefined ? p.lineIndex : 0;
+    this.currentEp = p.episode;
+  }
+
+  /** 把上一次留下的播放状态清干净（画面尺寸与 Surface id 保留，它们还有用） */
+  private resetForReentry(): void {
+    this.released = false;
+    this.starting = false;
+    this.playPending = false;
+    this.restartQueued = false;
+    this.speedApplied = false;
+    this.playing = false;
+    this.buffering = false;
+    this.hasStarted = false;
+    this.showLoading = true;
+    this.stallLoading = false;
+    this.errorText = '';
+    this.loadingHint = '';
+    this.durationMs = 0;
+    this.durationText = '00:00';
+    this.positionText = Utils.formatTime(this.positionMs);
+    this.sliderValue = 0;
+    this.sliderMax = 100;
+    this.controlsVisible = true;
+    this.showEpisodes = false;
+    this.showSpeeds = false;
+    this.showSources = false;
+    this.speedItems = [];
+    this.speedTesting = false;
+    this.videoW = 0;
+    this.videoH = 0;
+    this.fitCover = false;
+    this.adjustKind = '';
+    this.autoSwitching = false;
+    this.autoTried = [];
+    this.stallCount = 0;
+    this.episodes = [];
+    this.loadTask = null;
+    this.lastPosMs = 0;
+    this.lastProgressAt = 0;
     this.clearStall();
     this.clearWatchdog();
-    this.saveProgress();
-    // 不管从哪个入口离开（返回键 / 系统返回手势 / 自动连播结束），都要把屏幕方向
-    // 交还系统（不是锁竖屏！）、并把窗口布局全屏复原，否则主界面会转不动 / 被裁掉底部。
-    this.restoreRotation();
-    this.applyWindowFullScreen(false);
-    // 窗口亮度是「霸占式」的：不还原的话，控制中心里调系统亮度会一直失效
-    this.restoreBrightness();
+    this.clearResync();
+    this.clearLoadingTimer();
+    this.clearBgTimer();
     this.clearAdjustTimer();
-    this.release();
-    // 离线播放用的本地服务只在这一页需要，离开就关掉，别一直占着端口
-    if (this.offlineDir !== '') {
-      LocalHttpServer.shared().stop();
+    // release() 里把常亮、投播会话、前后台回调都交还了，重新进入必须再拿回来
+    this.holdScreen();
+    this.settings = SettingsStore.shared().get();
+    this.speedValue = this.settings.defaultSpeed;
+    this.syncSystemVolume();
+    this.initCastSession();
+    AppLifecycle.bgHandler = (background: boolean) => {
+      this.handleAppBackground(background);
+    };
+    if (this.offlineDir === '') {
+      this.loadTask = this.loadEpisodes();
     }
+  }
+
+  /**
+   * 用缓存节点上仍然有效的 Surface 把播放器接回来。
+   * 复用节点时 XComponent 的 onLoad 不会再来一次，只能主动取 surfaceId；
+   * 取不到就隔 120ms 再试 —— 节点重新挂载偶尔比 onShown 晚一拍。
+   */
+  private resumePlayback(retries: number): void {
+    const sid: string = this.xController.getXComponentSurfaceId();
+    if (sid !== '') {
+      this.onSurfaceReady(sid);
+      return;
+    }
+    if (retries <= 0) {
+      console.warn('[player] no surface after reentry, playback not started');
+      return;
+    }
+    setTimeout(() => {
+      this.resumePlayback(retries - 1);
+    }, 120);
+  }
+
+  /**
+   * 交还窗口状态：方向 + 布局全屏。
+   * 两件都要做 —— 只交还方向不关布局全屏，主界面就会顶到状态栏下面、
+   * 底部导航贴着屏幕边，看起来像整页被拉长。
+   */
+  private restoreWindowState(): void {
+    this.restoreRotation();
+    DevicePolicy.restoreLayout();
   }
 
   private toast(msg: string): void {
@@ -255,6 +481,9 @@ export struct PlayerPage {
       this.speedApplied = false;
     };
     this.player.onProgress = (positionMs: number, durationMs: number) => {
+      // 持续记录当前位置：画中画进出或画面重建导致重新 create 时，
+      // startPlay 会用它做续播点；不记的话会跳回进页面时的老位置。
+      this.positionMs = positionMs;
       // 进度在推进 = 没有卡顿：取消预约的检查并收掉加载圈
       if (positionMs > this.lastPosMs) {
         this.lastPosMs = positionMs;
@@ -277,6 +506,7 @@ export struct PlayerPage {
     this.player.onPlayStateChanged = (playing: boolean) => {
       this.playing = playing;
       this.syncCastPlayback(playing);
+      this.syncPiPControl(playing);
       this.buffering = false;
       // 一旦进入 playing，立刻收掉加载圈并标记已起播
       this.showLoading = false;
@@ -335,6 +565,15 @@ export struct PlayerPage {
       this.videoW = width;
       this.videoH = height;
       this.updateSurfaceSize();
+      // 小窗比例要跟视频一致，否则 16:9 的片子会被塞进方框里
+      const c = this.pipController;
+      if (c !== null && width > 0 && height > 0) {
+        try {
+          c.updateContentSize(width, height);
+        } catch (e) {
+          // 非画中画态调用会抛错，忽略
+        }
+      }
     };
     this.player.onBufferState = (buffering: boolean) => {
       // 只对离线播放启用：本地读盘不该出现长时间缓冲，
@@ -778,6 +1017,11 @@ export struct PlayerPage {
     if (this.offlineDir !== '' || !this.settings.playHistoryEnabled) {
       return;
     }
+    // 播放器已经释放时 currentTime() 恒为 0：back() 里刚存好的续播点会被
+    // aboutToDisappear 这一轮再写一次冲成 00:00。没有播放器又没给明确位置就跳过。
+    if (positionMs < 0 && !this.player.isCreated()) {
+      return;
+    }
     const pos = positionMs >= 0 ? positionMs : this.player.currentTime();
     const dur = durationMs >= 0 ? durationMs : this.player.duration();
     const ep = this.playableEpisode();
@@ -803,6 +1047,7 @@ export struct PlayerPage {
     }
     this.released = true;
     this.player.release();
+    this.dropScreen();
     if (this.holderFile !== null) {
       try {
         fs.closeSync(this.holderFile.fd);
@@ -817,6 +1062,11 @@ export struct PlayerPage {
     }
     this.clearPressTimer();
     this.clearResync();
+    this.clearBgTimer();
+    this.releasePiP();
+    AppLifecycle.bgHandler = () => {
+      // 播放器已释放，不再响应前后台
+    };
   }
 
   private clearLoadingTimer(): void {
@@ -838,13 +1088,36 @@ export struct PlayerPage {
   }
 
   private onSurfaceReady(surfaceId: string): void {
-    this.surfaceId = surfaceId;
+    if (surfaceId === '') {
+      return;
+    }
     // 先让内容区变成整屏，再切横屏：顺序反了会先按竖屏安全区算一次尺寸
     this.applyWindowFullScreen(true);
     // 一进入播放页就切横屏（视频类应用的标准行为），退出全屏再切回竖屏
     this.setLandscape(true);
+    if (this.released) {
+      // 已经在退场路上（release 之后面才回来）：不要再建播放器
+      return;
+    }
+    if (surfaceId === this.surfaceId && this.player.isCreated()) {
+      // 同一个画面又来一次（onLoad 重入 / 复用节点后主动补一次）：
+      // 只校正窗口，绝不重建播放器 —— 重建会把进度冲回片头
+      this.initPiP();
+      return;
+    }
+    const firstReady: boolean = this.surfaceId === '';
+    this.surfaceId = surfaceId;
+    this.surfaceReady = true;
+    if (!firstReady && this.player.isCreated() && this.player.rebindSurface(surfaceId)) {
+      // 画面重建（进出画中画 / 分屏 / 折叠屏）：只换 Surface，不重建播放器。
+      // 否则每进一次小窗都从头播一遍。
+      this.initPiP();
+      return;
+    }
     this.player.create(surfaceId).then((ok: boolean) => {
-      if (ok) {
+      if (ok && !this.released) {
+        // XComponent 的 surface 已经存在了才建控制器，否则小窗是黑的
+        this.initPiP();
         this.startPlay();
       }
     });
@@ -1160,7 +1433,7 @@ export struct PlayerPage {
       await s.activate();
       const md: avSession.AVMetadata = {
         assetId: this.vodId !== '' ? this.vodId : 'unknown',
-        title: this.title !== '' ? this.title : 'LibreTV'
+        title: this.title !== '' ? this.title : Brand.displayName(this.getUIContext())
       };
       await s.setAVMetadata(md);
       // 关键：声明需要「url 投播」能力，投播列表才会出现智慧屏 / DLNA 等设备；
@@ -1361,6 +1634,19 @@ export struct PlayerPage {
    * 只在本页开启，离开立刻复原 —— 首页/其它页仍走系统默认安全区，不受影响。
    */
   private applyWindowFullScreen(on: boolean): void {
+    // 优先用进页面时就缓存好的主窗口：会话期间 getLastWindow 可能拿不到，
+    // 而窗口布局一旦没设上，整页内容就会画到状态栏与导航条底下。
+    const cached: window.Window | null = this.win;
+    if (cached !== null) {
+      try {
+        cached.setWindowLayoutFullScreen(on).catch(() => {
+          // 个别系统版本/分屏场景会拒绝，忽略即可，不影响播放
+        });
+        return;
+      } catch (e) {
+        // 拿不到就退回下面那条路
+      }
+    }
     const context = this.getUIContext().getHostContext();
     if (context === undefined) {
       return;
@@ -1410,7 +1696,15 @@ export struct PlayerPage {
 
   private back(): void {
     this.saveProgress();
-    this.restoreRotation();
+    // 先停播、交还窗口状态，再 pop。
+    // 只靠 aboutToDisappear 不够稳：页面销毁由框架调度，万一它没跑到，
+    // 用户就会看到「列表页面被拉长、视频声音还在响」。
+    this.restoreWindowState();
+    // 亮度是霸占式的（setWindowBrightness 作用于主窗口）：不还原的话，
+    // 回到列表后控制中心调系统亮度会一直没反应。
+    this.restoreBrightness();
+    this.clearAdjustTimer();
+    this.release();
     this.navPathStack.pop();
   }
 
@@ -1419,6 +1713,9 @@ export struct PlayerPage {
       Stack({ alignContent: Alignment.Center }) {
         // 视频画面：尺寸由 updateSurfaceSize 按原始宽高比算出，Stack 负责居中
         VideoSurface({
+          // 控制器由页面持有：创建画中画时必须把它交给 PiPWindow，
+          // 组件内部自己 new 的话页面就够不着了
+          controller: this.xController,
           surfaceWidth: this.displayW,
           surfaceHeight: this.displayH,
           onSurfaceReady: (surfaceId: string) => {
@@ -2021,11 +2318,275 @@ export struct PlayerPage {
     }
     .hideTitleBar(true)
     .hideBackButton(true)
+    .onShown(() => {
+      this.onPageShown();
+    })
     .onBackPressed(() => {
       this.back();
       return true;
     })
   }
+
+  private clearBgTimer(): void {
+    if (this.bgTimer >= 0) {
+      clearTimeout(this.bgTimer);
+      this.bgTimer = -1;
+    }
+  }
+
+  /**
+   * 初始化画中画控制器。
+   *
+   * 时机：XComponent 的 onLoad 之后（Surface 已经存在）才能 create，
+   * 否则 componentController 拿不到有效 Surface，小窗是黑的。
+   *
+   * 核心是 setAutoStartEnabled(true)：主窗退到后台（回桌面、开别的 App）时
+   * 系统自动把画面接进画中画小窗。不开这一项，画面被挂到后台、声音照放 ——
+   * 正是用户反馈的现象。
+   */
+  private async initPiP(): Promise<void> {
+    if (this.pipController !== null || this.pipCreating || this.pipUnsupported || this.released) {
+      return;
+    }
+    if (!PiPWindow.isPiPEnabled()) {
+      // 系统「设置 → 系统 → 智慧多窗 → 自动启动画中画」关着，或设备不支持
+      this.pipUnsupported = true;
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext();
+    if (ctx === undefined) {
+      return;
+    }
+    this.pipCreating = true;
+    try {
+      const config: PiPWindow.PiPConfiguration = {
+        context: ctx,
+        componentController: this.xController,
+        // 必须与 IndexPage 里 Navigation 的 id 完全一致：
+        // 系统靠它缓存栈顶信息，从画中画恢复时才回得到播放页而不是首页
+        navigationId: NavIds.MAIN,
+        templateType: PiPWindow.PiPTemplateType.VIDEO_PLAY,
+        // 单位是 px，必须是大于 0 的整数；未知时先按 16:9 给个基准
+        contentWidth: this.videoW > 0 ? this.videoW : 1920,
+        contentHeight: this.videoH > 0 ? this.videoH : 1080
+      };
+      const controller: PiPWindow.PiPController = await PiPWindow.create(config);
+      if (this.released) {
+        controller.stopPiP().catch(() => {
+          // 已释放，停不掉也无所谓
+        });
+        return;
+      }
+      this.pipController = controller;
+      controller.setAutoStartEnabled(true);
+      controller.on('stateChange', (state: PiPWindow.PiPState, reason: string) => {
+        this.onPiPStateChange(state, reason);
+      });
+      controller.on('controlEvent', (param: PiPWindow.ControlEventParam) => {
+        this.onPiPControlEvent(param);
+      });
+    } catch (e) {
+      // 401 参数错误 / 801 设备不支持：降级为「不进画中画」，
+      // 不弹窗打扰用户；但要留一条日志，否则排查时完全无从下手
+      console.warn('[pip] create failed: ' + JSON.stringify(e));
+      this.pipUnsupported = true;
+      this.pipController = null;
+    } finally {
+      this.pipCreating = false;
+    }
+  }
+
+  private releasePiP(): void {
+    const c = this.pipController;
+    this.pipController = null;
+    this.pipActive = false;
+    if (c === null) {
+      return;
+    }
+    try {
+      c.off('stateChange');
+    } catch (e) {
+      // ignore
+    }
+    try {
+      c.off('controlEvent');
+    } catch (e) {
+      // ignore
+    }
+    c.stopPiP().catch(() => {
+      // 没在显示时会抛 1300012，忽略
+    });
+  }
+
+  private onPiPStateChange(state: PiPWindow.PiPState, reason: string): void {
+    if (state === PiPWindow.PiPState.STARTED) {
+      this.pipActive = true;
+      // 小窗里不该再盖着一层控制条 / 长按浮层
+      this.controlsVisible = false;
+      this.clearPressTimer();
+      this.pressSpeed = false;
+      this.seekPreviewing = false;
+      return;
+    }
+    if (state === PiPWindow.PiPState.ABOUT_TO_STOP) {
+      this.pressSpeed = false;
+      this.seekPreviewing = false;
+      // 记住「停小窗之前是不是在播」：系统会在停窗过程中把播放器暂停，
+      // 等 STOPPED 再读就已经是 false 了。
+      if (!this.pipStopBySelf) {
+        this.pipWasPlaying = this.player.isPlaying();
+      }
+      return;
+    }
+    if (state === PiPWindow.PiPState.STOPPED) {
+      this.pipActive = false;
+      const bySelf: boolean = this.pipStopBySelf;
+      this.pipStopBySelf = false;
+      if (bySelf) {
+        // 本页为了让画面收回全屏而叫停的，不是用户要关小窗：绝不能暂停，
+        // 否则回到全屏画面是停住的，还得再点一次播放。
+        this.resumeAfterPiPRestore();
+        return;
+      }
+      if (reason === 'panelActionRestore') {
+        // 用户点了小窗上的「全屏 / 恢复」按钮：应用已被拉回前台，接着播
+        this.resumeAfterPiPRestore();
+        return;
+      }
+      // reason 只有新系统才给真实值（旧版本恒为 '0'，此时不动，避免误停播）。
+      // 这三种都是「用户主动关掉小窗」，必须暂停 —— 否则声音会一直在后台响。
+      if (reason === 'panelActionDelete' || reason === 'dragDelete' || reason === 'requestDelete') {
+        this.pipWasPlaying = false;
+        this.player.pause();
+        this.saveProgress();
+      }
+      return;
+    }
+    if (state === PiPWindow.PiPState.ERROR) {
+      this.pipActive = false;
+    }
+  }
+
+  private onPiPControlEvent(param: PiPWindow.ControlEventParam): void {
+    if (param.controlType !== PiPWindow.PiPControlType.VIDEO_PLAY_PAUSE) {
+      return;
+    }
+    // 不看 status：各版本对它的语义（当前状态 / 目标动作）不一致。
+    // 直接按播放器真实状态取反，行为一定是对的。
+    if (this.player.isPlaying()) {
+      this.player.pause();
+    } else {
+      this.player.play();
+    }
+  }
+
+  /** 把小窗里的播放/暂停按钮状态跟实际播放状态对齐 */
+  private syncPiPControl(playing: boolean): void {
+    const c = this.pipController;
+    if (c === null) {
+      return;
+    }
+    try {
+      // status 表示「这个按钮接下来会做什么」：正在播就显示成暂停按钮
+      c.updatePiPControlStatus(PiPWindow.PiPControlType.VIDEO_PLAY_PAUSE,
+        playing ? PiPWindow.PiPControlStatus.PAUSE : PiPWindow.PiPControlStatus.PLAY);
+    } catch (e) {
+      // 非画中画态调用会抛错，忽略
+    }
+  }
+
+  /**
+   * 回到桌面 / 打开其他 App。
+   * 画中画由系统异步拉起，onBackground 先到、小窗随后才出现，所以先给 1.2 秒宽限；
+   * 到点还没有小窗，说明这台设备或系统开关不支持，那就必须自己暂停 ——
+   * 否则声音会在后台一直响下去（用户最初报的就是这个）。
+   */
+  private handleAppBackground(background: boolean): void {
+    this.clearBgTimer();
+    if (this.released) {
+      return;
+    }
+    if (!background) {
+      // 回到前台。此时小窗还挂着，说明用户是点应用图标进来的 ——
+      // 他要的是接着全屏看，不是继续缩在角落。主动关掉小窗，画面收回本页。
+      this.restoreFromPiP();
+      return;
+    }
+    this.bgTimer = setTimeout(() => {
+      this.bgTimer = -1;
+      if (this.released || !AppLifecycle.isBackground() || this.pipActive) {
+        return;
+      }
+      this.player.pause();
+      this.saveProgress();
+    }, 1200);
+  }
+
+  /**
+   * 从画中画收回页面（应用回到前台时调用）。
+   * 关掉小窗后画面会重新挂回本页的 XComponent，走 onSurfaceReady 的「重建」分支，
+   * 只换 Surface 不重建播放器 —— 进度和播放状态都不丢。
+   */
+  private restoreFromPiP(): void {
+    if (!this.pipActive) {
+      return;
+    }
+    const c = this.pipController;
+    if (c === null) {
+      return;
+    }
+    // 先置位，避免 stateChange 回来之前又触发一次 stopPiP
+    this.pipActive = false;
+    // 停窗前先记住是不是在播：系统会在停窗过程中暂停播放器，之后再读就晚了
+    this.pipWasPlaying = this.player.isPlaying();
+    // 打上「是自己叫停」的标记 —— 否则系统回报的 requestDelete 会被当成
+    // 「用户关掉了小窗」，恢复全屏时直接暂停（本函数的调用方正是回前台）
+    this.pipStopBySelf = true;
+    try {
+      c.stopPiP().catch(() => {
+        // 已经不在小窗态会抛 1300012，忽略
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  /**
+   * 从画中画收回全屏后接着播。
+   * 系统停掉小窗时会把播放器暂停，而恢复全屏恰恰是「接着看」的场景，
+   * 不该让用户再点一次播放键 —— 除非他本来就是暂停状态下进的小窗。
+   */
+  private resumeAfterPiPRestore(): void {
+    if (!this.pipWasPlaying) {
+      return;
+    }
+    this.pipWasPlaying = false;
+    this.nudgePlay(2);
+  }
+
+  /**
+   * 补播：立刻试一次，没起来再隔 300ms 试一次。
+   * 收回全屏时 XComponent 的 Surface 会重新挂回来，onSurfaceReady 里可能要把
+   * 播放器重建一遍 —— 比 STOPPED 回调慢一拍，所以不能只试一次。
+   */
+  private nudgePlay(retries: number): void {
+    if (this.released) {
+      return;
+    }
+    this.player.play();
+    if (retries <= 0) {
+      return;
+    }
+    setTimeout(() => {
+      if (this.released) {
+        return;
+      }
+      if (!this.player.isPlaying()) {
+        this.nudgePlay(retries - 1);
+      }
+    }, 300);
+  }
+
 
   private clearPressTimer(): void {
     if (this.pressTimer >= 0) {

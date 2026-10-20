@@ -12,6 +12,7 @@ import { DownloadManager } from '../data/DownloadManager';
 import { SettingsStore } from '../data/SettingsStore';
 import { ScreenKeeper } from '../common/ScreenKeeper';
 import { DevicePolicy } from '../common/DevicePolicy';
+import { AppLifecycle } from '../common/AppLifecycle';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -67,11 +68,18 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    AppLifecycle.setBackground(false);
     // 回到前台立刻重挂中断的下载。
     // 后台期间系统会冻结应用线程，HttpRequest 的回调可能再也回不来；
     // 只靠 60s 看门狗太慢，用户看到的就是「进度条一直不动」。
     // 已经在跑的任务会被 active 标记挡掉，重复调用无副作用。
     DownloadManager.shared().resumeInterrupted();
+  }
+
+  onBackground(): void {
+    // 播放页用它决定「要不要自己停住」：画中画能接管就继续播，接管不了就得暂停，
+    // 否则声音会在后台一直响（用户最初报的就是这个现象）。
+    AppLifecycle.setBackground(true);
   }
 
   onWindowStageDestroy(): void {

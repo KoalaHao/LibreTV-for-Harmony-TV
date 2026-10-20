@@ -2,7 +2,7 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "LibreTV native client"
+      "value": "多源聚合影视播放器"
     },
     {
       "name": "EntryAbility_label",
@@ -10,7 +10,7 @@
     },
     {
       "name": "EntryAbility_desc",
-      "value": "LibreTV 原生客户端"
+      "value": "多源聚合影视播放器"
     },
     {
       "name": "permission_internet_reason",
@@ -23,6 +23,18 @@
     {
       "name": "permission_camera_reason",
       "value": "需要使用相机扫描二维码以导入订阅或播放列表"
+    },
+    {
+      "name": "brand_name",
+      "value": "LibreTV"
+    },
+    {
+      "name": "brand_about_title",
+      "value": "LibreTV 鸿蒙原生客户端"
+    },
+    {
+      "name": "brand_disclaimer",
+      "value": "本应用为个人学习研究作品，与「LibreTV」品牌及其运营方以及任何电视台、影视平台均无关联，亦未获其授权或认可。"
     }
   ]
 }

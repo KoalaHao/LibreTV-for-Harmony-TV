@@ -8,6 +8,7 @@ import { Utils } from '../common/Utils';
 import { EmptyView } from '../components/CommonWidgets';
 import { DetailPageParam } from './DetailPage';
 import { PlayerPageParam } from './PlayerPage';
+import { latestNavParam } from '../common/NavParam';
 
 export interface HistoryPageParam {
   /** history / favorites */
@@ -264,6 +265,13 @@ export struct HistoryPage {
     }
     .hideTitleBar(true)
     .onShown(() => {
+      // 缓存节点复用后 mode 还停在上一次：从「播放历史」退出再进「我的收藏」，
+      // 看到的会是历史列表。参数必须重新取。
+      const raw: Object | null = latestNavParam(this.navPathStack, 'History');
+      if (raw !== null) {
+        const p: HistoryPageParam = raw as HistoryPageParam;
+        this.mode = p.mode;
+      }
       this.refresh();
     })
   }

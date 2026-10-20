@@ -18,8 +18,23 @@ export struct DownloadsPage {
 
   aboutToAppear(): void {
     this.tasks = DownloadManager.shared().getTasks();
-    // 每 1s 拉一次进度。实测下载实际在跑（沙箱里分片数量一直在涨），
-    // 但界面停在 "2/287" 不动，就是因为这里只在进入页面时读了一次。
+    this.startTick();
+  }
+
+  aboutToDisappear(): void {
+    this.stopTick();
+  }
+
+  /**
+   * 开始轮询进度（幂等）。
+   * 每 1s 拉一次：下载在后台线程推进，只在进入页面时读一次会让界面停在
+   * "2/287" 不动。必须能被重复调用 —— Navigation 复用缓存节点时
+   * aboutToAppear 不会再执行，重新进入只有 onShown 会来。
+   */
+  private startTick(): void {
+    if (this.tickTimer >= 0) {
+      return;
+    }
     this.tickTimer = setInterval(() => {
       const next: DownloadTaskRecord[] = DownloadManager.shared().getTasks();
       if (DownloadManager.progressKey(next) !== DownloadManager.progressKey(this.tasks)) {
@@ -28,7 +43,8 @@ export struct DownloadsPage {
     }, 1000);
   }
 
-  aboutToDisappear(): void {
+  /** 停止轮询（幂等）：离开页面、退到后台都要停 */
+  private stopTick(): void {
     if (this.tickTimer >= 0) {
       clearInterval(this.tickTimer);
       this.tickTimer = -1;
@@ -281,6 +297,15 @@ export struct DownloadsPage {
       .backgroundColor($r('app.color.color_bg'))
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      // 缓存节点复用不会重跑 aboutToAppear：重新开闸并立刻拉一次，
+      // 免得用户看到上一次留下的旧进度。
+      this.tasks = DownloadManager.shared().getTasks();
+      this.startTick();
+    })
+    .onHidden(() => {
+      this.stopTick();
+    })
   }
 
   private hasCompletedTasks(): boolean {

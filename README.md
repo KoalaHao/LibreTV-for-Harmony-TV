@@ -310,9 +310,12 @@ node "<DevEco>\tools\hvigor\bin\hvigorw.js" `
 产物：`entry/build/default/outputs/default/entry-default-signed.hap`
 
 > **版本号是自动的**：打包前会先跑 `scripts/version.js`，源码（`entry/src/main`）有改动就
-> 把版本号 +0.01（`1.0.6` → `1.0.7`），同一份代码重复打包不会虚增。
+> 把版本号末位 +1。**每一位最大是 9，超过就归零并向左进一位**：
+> `1.1.8 → 1.1.9 → 1.2.0`、`1.9.9 → 2.0.0`。
+> 同一份代码重复打包不会虚增。
 > 唯一写版本号的地方是 `AppScope/app.json5`，界面两处都运行时读取它。
-> 只看不改：`node scripts\version.js --print`。
+> 只看不改：`node scripts\version.js --print`；
+> 手动设成指定值（顺带记下当前源码指纹）：`node scripts\version.js --set 1.2.0`。
 
 ### 项目没有第三方依赖
 

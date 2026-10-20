@@ -9,6 +9,7 @@ import { HistoryStore } from '../data/HistoryStore';
 import { Utils } from '../common/Utils';
 import { EmptyView, LoadingView } from '../components/CommonWidgets';
 import { DetailPageParam } from './DetailPage';
+import { latestNavParam } from '../common/NavParam';
 
 export interface SearchPageParam {
   keyword: string;
@@ -26,9 +27,13 @@ export struct SearchResultPage {
   @State failedCount: number = 0;
   @State historyWords: string[] = [];
 
+  /** 已经处理过的路由参数：缓存节点复用后靠它判断「这次是不是换了个关键词」 */
+  private appliedKeyword: string = '';
+
   aboutToAppear(): void {
     this.historyWords = HistoryStore.shared().getSearchHistory();
     if (this.keyword !== '') {
+      this.appliedKeyword = this.keyword;
       this.searchValue = this.keyword;
       this.runSearch();
     }
@@ -204,6 +209,26 @@ export struct SearchResultPage {
       .backgroundColor($r('app.color.color_bg'))
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      this.historyWords = HistoryStore.shared().getSearchHistory();
+      // Navigation 会复用缓存的 NavDestination 节点：换个关键词再搜时页面不会重建，
+      // 必须自己取最新参数，否则看到的还是上一次的结果。
+      const raw: Object | null = latestNavParam(this.navPathStack, 'Search');
+      if (raw === null) {
+        return;
+      }
+      const p: SearchPageParam = raw as SearchPageParam;
+      if (p.keyword === '' || p.keyword === this.appliedKeyword) {
+        return;
+      }
+      this.appliedKeyword = p.keyword;
+      this.keyword = p.keyword;
+      this.searchValue = p.keyword;
+      this.results = [];
+      this.failedCount = 0;
+      this.searched = false;
+      this.runSearch();
+    })
   }
 
   @Builder

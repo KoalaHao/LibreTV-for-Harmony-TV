@@ -3,7 +3,12 @@
  * LibreTV HarmonyOS —— 版本号自动更迭
  * =====================================
  *
- * 规则：**源码有改动时，打包前把版本号 +0.01**（1.0.5 → 1.0.6 → 1.0.7 ...）
+ * 规则：**源码有改动时，打包前把版本号末位 +1；每一位最大 9，超过就归零并向左进一位**
+ *
+ *   1.1.7 → 1.1.8 → 1.1.9 → 1.2.0 → 1.2.1 → … → 1.9.9 → 2.0.0
+ *
+ * 也就是像里程表一样逐位滚动，末位不会变成 1.1.10 这种两位数。
+ * 注意：末位从 9 回到 0 时中间位 +1；中间位从 9 回到 0 时首位 +1。
  *
  * 为什么要判断「源码有没有改」：
  *   如果每次构建都无脑 +1，一天连打三次包就会变成 1.0.8，
@@ -18,7 +23,9 @@
  * 用法：
  *   node scripts/version.js           有改动就 +0.01（构建钩子自动调用这个）
  *   node scripts/version.js --print   只打印当前版本，不改文件
- *   node scripts/version.js --force   强制 +0.01（不改源码也想出个新版本时用）
+ *   node scripts/version.js --force   强制递增一位（不改源码也想出个新版本时用）
+ *   node scripts/version.js --set 1.1.0   直接把版本号设成指定值并记下当前源码指纹
+ *                                         （用于规整历史版本号，不会再多进一位）
  */
 
 const fs = require('fs');
@@ -47,13 +54,42 @@ function listFiles(dir, out) {
   return out;
 }
 
-/** 对源码目录做内容哈希：改一个字就会变，改文件名也会变 */
+/**
+ * 品牌词不参与哈希。
+ *
+ * scripts/brand.js 会在每次构建前把品牌文案改成公开品牌（LibreTV）或本地品牌
+ * （名字取自 scripts/.brand-local.json，该文件不提交）。那只是「同一份源码的两种叫法」，
+ * 不该被当成源码改动 —— 否则每切一次品牌就白涨一个版本号。
+ * 两套文案是同一个模板拼出来的，除了品牌词本身完全一致，替换后才能等价。
+ */
+function brandWords() {
+  const words = ['LibreTV'];
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(__dirname, '.brand-local.json'), 'utf8'));
+    const local = typeof data.localBrand === 'string' ? data.localBrand.trim() : '';
+    if (local.length > 0 && words.indexOf(local) < 0) {
+      words.push(local);
+    }
+  } catch (e) {
+    // 没有本地品牌文件：只屏蔽公开品牌词就够了
+  }
+  return words;
+}
+
+const BRAND_WORDS = new RegExp(brandWords().join('|'), 'g');
+const TEXT_FILE = /\.(json|json5|ets|ts|js|md|txt)$/i;
+
+/** 对源码目录做内容哈希：改一个字就会变，改文件名也会变（品牌词除外） */
 function sourceHash() {
   const files = listFiles(SCAN_DIR, []).sort();
   const hash = crypto.createHash('sha1');
   for (const file of files) {
     hash.update(path.relative(ROOT, file).split(path.sep).join('/'));
-    hash.update(fs.readFileSync(file));
+    let buf = fs.readFileSync(file);
+    if (TEXT_FILE.test(file)) {
+      buf = Buffer.from(buf.toString('utf8').replace(BRAND_WORDS, '__BRAND__'), 'utf8');
+    }
+    hash.update(buf);
   }
   return hash.digest('hex');
 }
@@ -72,15 +108,62 @@ function currentVersion() {
   return { name: nameMatch[1], code: parseInt(codeMatch[1], 10) };
 }
 
-/** 1.0.5 -> 1.0.6；1.0.9 -> 1.0.10（末位 +1，不进位，方便一眼看出改了几次） */
-function nextName(name) {
+/** 把 "1.2.3" 拆成 [1,2,3]，并挡掉非数字的写法 */
+function toDigits(name) {
   const parts = String(name).split('.');
-  const last = parseInt(parts[parts.length - 1], 10);
-  if (!Number.isFinite(last)) {
-    throw new Error('versionName 格式不认识：' + name);
+  if (parts.length < 2) {
+    throw new Error('versionName 至少要有两段，形如 1.2.3：' + name);
   }
-  parts[parts.length - 1] = String(last + 1);
-  return parts.join('.');
+  const digits = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) {
+      throw new Error('versionName 里有非数字段，形如 1.2.3：' + name);
+    }
+    digits.push(parseInt(part, 10));
+  }
+  return digits;
+}
+
+/**
+ * 把越界的位（>9）压回 0 并向左进一位。
+ * 正常递增不会产生越界位，这个方法只用于规整历史版本号（1.0.13 -> 1.1.0）。
+ */
+function normalizeDigits(digits) {
+  for (let i = digits.length - 1; i > 0; i -= 1) {
+    if (digits[i] > 9) {
+      digits[i] = 0;
+      digits[i - 1] += 1;
+    }
+  }
+  return digits;
+}
+
+/** 规整后的版本号字符串：1.0.13 -> 1.1.0 */
+function normalizeName(name) {
+  return normalizeDigits(toDigits(name)).join('.');
+}
+
+/**
+ * 里程表式递增：每一位最大 9，超过就归零并向左进一位。
+ *   1.1.9 -> 1.2.0      1.9.9 -> 2.0.0
+ * 首位是最高位，它没有更左的位可进 —— 三位全是 9 就到顶了，
+ * 此时保持原值并告警：绕回 0.0.0 比「版本号不变」更像故障。
+ */
+function nextName(name) {
+  const digits = normalizeDigits(toDigits(name));
+  const atCeiling = digits.every((d) => d === 9);
+  if (atCeiling) {
+    console.warn('[version] 版本号已到上限 ' + digits.join('.') + '，不再递增');
+    return digits.join('.');
+  }
+  for (let i = digits.length - 1; i >= 0; i -= 1) {
+    digits[i] += 1;
+    if (digits[i] <= 9) {
+      break;
+    }
+    digits[i] = 0;
+  }
+  return digits.join('.');
 }
 
 /** 写回三处版本号，其余格式原样保留 */
@@ -143,6 +226,29 @@ function main() {
 
   if (args.includes('--print')) {
     console.log('[version] current: ' + cur.name + ' (versionCode ' + cur.code + ')');
+    return;
+  }
+
+  // --set：直接把版本号设成指定值，并记下当前源码指纹（下次构建不会再多进一位）
+  const setIdx = args.indexOf('--set');
+  if (setIdx >= 0) {
+    const want = args[setIdx + 1];
+    if (!want) {
+      throw new Error('--set 后面要跟版本号，例如 --set 1.1.0');
+    }
+    const normalized = normalizeName(want);
+    const newCode = cur.code + 1;
+    writeVersion(cur.name, normalized, newCode);
+    writeState(sourceHash(), { name: normalized, code: newCode });
+    console.log(
+      '[version] set: ' + cur.name + ' -> ' + normalized +
+      ' (versionCode ' + cur.code + ' -> ' + newCode + ')'
+    );
+    if (normalized !== want) {
+      console.log(
+        '[version] note: "' + want + '" 不合规（有某一位超过 9），已按进位规则规整为 ' + normalized
+      );
+    }
     return;
   }
 

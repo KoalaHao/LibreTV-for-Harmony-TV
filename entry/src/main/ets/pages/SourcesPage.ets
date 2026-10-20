@@ -12,6 +12,7 @@ import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { EmptyView, TagText } from '../components/CommonWidgets';
+import { Brand } from '../common/Brand';
 
 @Component
 export struct SourcesPage {
@@ -411,7 +412,7 @@ export struct SourcesPage {
       liveSources.push(entry);
     }
     const payload: SourceExportPayload = {
-      name: 'LibreTV 视频源',
+      name: Brand.displayName(this.getUIContext()) + ' 视频源',
       updateTime: new Date().toISOString(),
       sources: sources,
       liveSources: liveSources
@@ -528,6 +529,10 @@ export struct SourcesPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onShown(() => {
+      // 缓存节点复用不会重跑 aboutToAppear：源可能在别处被增删过，重新读一遍
+      this.refresh();
+    })
   }
 
   @Builder

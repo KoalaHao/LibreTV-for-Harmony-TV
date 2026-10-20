@@ -448,6 +448,37 @@ export class AvPlayerController {
     return player.state === 'playing';
   }
 
+  /** 播放器实例是否已创建（用于区分「首次起播」和「画面重建」） */
+  isCreated(): boolean {
+    return this.player !== null;
+  }
+
+  /**
+   * 画面重建时只换 Surface，不重建播放器、不动进度。
+   * 进出画中画、分屏/折叠屏切换都可能让 XComponent 重新走一遍 onLoad，
+   * 那时若再 create() 一次，播放会从头开始 —— 用户看到的是「一进小窗就跳回片头」。
+   * 回 true 表示已就地换好；false 表示当前状态不允许改 Surface（如正在 playing），
+   * 调用方应保持原样别动。
+   */
+  rebindSurface(surfaceId: string): boolean {
+    const player = this.player;
+    if (player === null || surfaceId === '') {
+      return false;
+    }
+    this.surfaceId = surfaceId;
+    try {
+      const st: string = player.state;
+      // SDK 约束：SurfaceID 只能在 initialized 态设置，prepared 实测也可用
+      if (st === 'initialized' || st === 'prepared') {
+        player.surfaceId = surfaceId;
+        return true;
+      }
+    } catch (e) {
+      return false;
+    }
+    return false;
+  }
+
   /** 当前进度（ms） */
   currentTime(): number {
     const player = this.player;

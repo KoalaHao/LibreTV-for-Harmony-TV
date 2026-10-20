@@ -100,7 +100,7 @@ export struct AboutPage {
             // ---------- 关于 ----------
             Column({ space: 6 }) {
               Row({ space: 6 }) {
-                Text('LibreTV 鸿蒙原生客户端')
+                Text($r('app.string.brand_about_title'))
                   .fontSize(15)
                   .fontWeight(FontWeight.Medium)
                   .fontColor($r('app.color.color_text'))
@@ -118,13 +118,13 @@ export struct AboutPage {
                 .fontColor($r('app.color.color_text_secondary'))
                 .width('100%')
                 .textAlign(TextAlign.Start)
-              Text('本应用为个人学习研究作品，与任何电视台、影视平台或同名品牌均无关联，亦未获其授权或认可。')
+              Text($r('app.string.brand_disclaimer'))
                 .fontSize(12)
                 .lineHeight(18)
                 .fontColor($r('app.color.color_text_secondary'))
                 .width('100%')
                 .textAlign(TextAlign.Start)
-              Text('开源协议：AGPL-3.0 · 部分实现参考 LibreTV（LibreSpark）开源项目')
+              Text('开源协议：AGPL-3.0 · 部分实现参考 LibreTV（LibreSpark）开源项目，本应用并非该项目官方版本')
                 .fontSize(12)
                 .lineHeight(18)
                 .fontColor($r('app.color.color_text_secondary'))

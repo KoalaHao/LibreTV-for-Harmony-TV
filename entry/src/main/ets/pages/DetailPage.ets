@@ -14,6 +14,7 @@ import { Utils } from '../common/Utils';
 import { LoadingView, TagText } from '../components/CommonWidgets';
 import { NetImage } from '../components/NetImage';
 import { PlayerPageParam } from './PlayerPage';
+import { latestNavParam } from '../common/NavParam';
 
 export interface DetailPageParam {
   sourceKey: string;
@@ -56,6 +57,32 @@ export struct DetailPage {
   aboutToAppear(): void {
     this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
     this.loadDetail(this.sourceKey, this.vodId);
+  }
+
+  /** 缓存节点复用后换成了另一部影片：把上一部的内容清掉，别让它在加载期间露出来 */
+  private resetForReentry(): void {
+    this.ready = false;
+    this.loading = true;
+    this.errorText = '';
+    this.infoTitle = this.title;
+    this.infoCover = '';
+    this.infoDesc = '';
+    this.infoYear = '';
+    this.infoArea = '';
+    this.infoType = '';
+    this.infoDirector = '';
+    this.infoActor = '';
+    this.infoRemarks = '';
+    this.infoSourceName = '';
+    this.episodes = [];
+    this.lines = [];
+    this.currentLine = 0;
+    this.currentEp = 0;
+    this.descExpanded = false;
+    this.progress = null;
+    this.speedItems = [];
+    this.speedTesting = false;
+    this.showSpeedPanel = false;
   }
 
   private toast(msg: string): void {
@@ -422,6 +449,20 @@ export struct DetailPage {
     }
     .hideTitleBar(true)
     .onShown(() => {
+      // Navigation 会复用缓存的 NavDestination 节点：换一部影片再进来时，
+      // 构造参数还是上一部的、页面也不会重建 —— 必须自己取最新参数重新加载，
+      // 否则会出现「点 A 打开的是 B 的详情」。
+      const raw: Object | null = latestNavParam(this.navPathStack, 'Detail');
+      if (raw !== null) {
+        const p: DetailPageParam = raw as DetailPageParam;
+        if (p.vodId !== this.vodId || p.sourceKey !== this.sourceKey) {
+          this.sourceKey = p.sourceKey;
+          this.vodId = p.vodId;
+          this.title = p.title;
+          this.resetForReentry();
+          this.loadDetail(this.sourceKey, this.vodId);
+        }
+      }
       // 从播放页返回时刷新进度与收藏态
       this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
       this.progress = HistoryStore.shared().getProgress(this.sourceKey, this.vodId);

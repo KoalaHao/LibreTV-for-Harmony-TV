@@ -40,6 +40,27 @@ export class DevicePolicy {
     }
   }
 
+  /**
+   * 关掉「布局全屏」，让内容重新避开状态栏与底部导航条。
+   *
+   * 这里用缓存的主窗口对象，**不依赖 UIContext** —— 播放页销毁阶段
+   * getUIContext() 可能已经拿不到，那条路一走空，窗口就一直停在全屏布局：
+   * 回到主界面表现为「顶部压到状态栏底下、底部导航贴着屏幕边」，像被拉长了一样。
+   */
+  static restoreLayout(): void {
+    const win = DevicePolicy.win;
+    if (win === null) {
+      return;
+    }
+    try {
+      win.setWindowLayoutFullScreen(false).catch(() => {
+        // 个别系统版本/分屏场景会拒绝，忽略
+      });
+    } catch (e) {
+      // ignore
+    }
+  }
+
   /** 按当前设备形态应用默认方向：宽设备跟随旋转，普通手机锁竖屏 */
   static applyDefault(): void {
     const win = DevicePolicy.win;

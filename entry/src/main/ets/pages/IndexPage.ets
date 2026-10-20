@@ -21,6 +21,7 @@ import { NetImage } from '../components/NetImage';
 import { XmltvParser } from '../model/XmltvParser';
 import { Utils } from '../common/Utils';
 import { AppVersion } from '../common/AppVersion';
+import { NavIds } from '../common/NavIds';
 import { EmptyView, LoadingView, SectionHeader, VodCard, SettingsRow } from '../components/CommonWidgets';
 import { SearchResultPage } from './SearchResultPage';
 import { SearchPageParam } from './SearchResultPage';
@@ -102,6 +103,17 @@ const REC_PAGE_MAX_START: number = 380;
 const BACK_TOP_SCREENS: number = 2;
 /** 拉到顶时的小提示 */
 const PULL_TOP_HINT: string = '别拉了，我到顶了！';
+/** 判定为「下拉」所需的最小纵向位移（vp） */
+const PULL_MIN_DY: number = 44;
+/**
+ * 判定为「下拉」时，纵向位移至少要是横向位移的这么多倍（≈58°）。
+ *
+ * 首页顶部那几条横向列表（继续观看 / 分类 / 直播）用的是内层横向 Scroll，
+ * 手势会继续冒泡到外层竖向 Scroll 的 onTouch 上。横划到尽头时手指会自然收势下坠，
+ * 只看 dy 的话很容易越过 44vp，被当成「往下拉」而弹出提示。
+ * 加上这个比值，横划（dx 远大于 dy）就再也进不来，而真正往下的拉拽（dx 很小）不受影响。
+ */
+const PULL_VERTICAL_RATIO: number = 1.6;
 
 /** 影片类型（豆瓣 genres 取值，逐个实测可用）；首项表示不限 */
 const REC_GENRE_OPTS: string[] = [
@@ -196,6 +208,11 @@ struct IndexPage {
   private pullHintTimer: number = -1;
   /** 本次手势按下的纵坐标（windowY），用来区分「下拉」与「上滑」 */
   private touchStartY: number = 0;
+  /**
+   * 本次手势按下的横坐标（windowX）。
+   * 光有纵向位移分不清「下拉」和「横划时手指下坠」，必须同时看横向位移才能判别方向。
+   */
+  private touchStartX: number = 0;
   /** 本次手势里提示是否已经弹过，避免一个手势反复弹 */
   private pullHintFired: boolean = false;
   /**
@@ -1176,6 +1193,9 @@ struct IndexPage {
     .hideBackButton(true)
     .mode(NavigationMode.Stack)
     .navDestination(this.pageMap)
+    // 画中画的 navigationId 必须和这个 id 一致：系统首次 setAutoStartEnabled(true) 时
+    // 会缓存这个 Navigation 的栈顶信息，从画中画恢复时靠它回到播放页而不是首页。
+    .id(NavIds.MAIN)
   }
 
 
@@ -1600,17 +1620,30 @@ struct IndexPage {
       // 用 touch 而不是 onScrollEdge：后者在贴顶时再拉不会重复触发。
       .onTouch((e: TouchEvent) => {
         if (e.type === TouchType.Down) {
-          this.touchStartY = e.touches.length > 0 ? e.touches[0].windowY : 0;
+          if (e.touches.length > 0) {
+            this.touchStartX = e.touches[0].windowX;
+            this.touchStartY = e.touches[0].windowY;
+          } else {
+            this.touchStartX = 0;
+            this.touchStartY = 0;
+          }
           this.pullHintFired = false;
         } else if (e.type === TouchType.Move) {
           if (!this.pullHintFired && e.touches.length > 0) {
             const dy: number = e.touches[0].windowY - this.touchStartY;
-            if (dy > 44 && this.homeAtTop()) {
+            const dx: number = e.touches[0].windowX - this.touchStartX;
+            // 三个条件缺一不可：
+            //   1. 确实是往下走（不是上滑）
+            //   2. 纵向位移明显压过横向位移 —— 否则用户其实在横划顶部那几条列表，
+            //      手指收势时的下坠不该被当成下拉
+            //   3. 页面本来就贴在顶端（在下面下拉没有「到顶」可言）
+            if (dy > PULL_MIN_DY && dy > Math.abs(dx) * PULL_VERTICAL_RATIO && this.homeAtTop()) {
               this.pullHintFired = true;
               this.flashPullHint();
             }
           }
         } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          // 抬手/取消都要把「本次手势已弹过」清掉，否则下一次下拉会哑火
           this.pullHintFired = false;
         }
       })
@@ -1986,7 +2019,7 @@ struct IndexPage {
     Scroll() {
       Column({ space: 10 }) {
         Column({ space: 4 }) {
-          Text('LibreTV')
+          Text($r('app.string.brand_name'))
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.color_text'))

@@ -41,6 +41,41 @@ function bumpVersionBeforeConfigLoad(): void {
   }
 }
 
+/**
+ * 品牌名自动同步 —— 同样必须在读资源之前完成。
+ *
+ * 规则（见 scripts/brand.js）：
+ *   build-profile.json5 里 signingConfigs 有内容 → 本地品牌（取自 scripts/.brand-local.json）
+ *   build-profile.json5 里 signingConfigs: []   → LibreTV（公开构建用）
+ *
+ * 换句话说：改了代码、切回签名版构建装机，名字自动变成本地品牌；
+ * 跑完脱敏（LibreTV-上传前脱敏.cmd）再构建，名字自动变 LibreTV，不用手动改。
+ * 必须排在版本号递增之前：品牌词会写进 entry/src/main，先定品牌再算源码指纹。
+ */
+function syncBrandBeforeConfigLoad(): void {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const childProcess = require('child_process');
+    const script = path.join(process.cwd(), 'scripts', 'brand.js');
+    if (!fs.existsSync(script)) {
+      console.warn('[brand] scripts/brand.js not found, skipped');
+      return;
+    }
+    const output = childProcess.execFileSync(process.execPath, [script], {
+      cwd: process.cwd(),
+      encoding: 'utf8'
+    });
+    if (output && output.trim().length > 0) {
+      console.log(output.trim());
+    }
+  } catch (err) {
+    // 品牌切换失败只提示，绝不能让整个打包失败
+    console.warn('[brand] auto sync skipped: ' + (err && err.message ? err.message : err));
+  }
+}
+
+syncBrandBeforeConfigLoad();
 bumpVersionBeforeConfigLoad();
 
 export default {

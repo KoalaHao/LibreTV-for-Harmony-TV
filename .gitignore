@@ -44,6 +44,16 @@ local.properties
 # 提交上去会让别人第一次构建就平白多一个版本号
 scripts/.version-state.json
 
+# ---------- 本地品牌名 ----------
+# scripts/brand.js 用它决定「签名构建装出来的应用叫什么」。
+# 公开仓库里不该出现这个名字；文件缺失时脚本会自动回落成 LibreTV。
+scripts/.brand-local.json
+
+# ---------- 发布脚本的本机配置 ----------
+# scripts/package-release.js 从这里读「桌面在哪」。桌面被重定向到别的盘时
+# （本机为 D:\Users\PPLC\Desktop）USERPROFILE\Desktop 是不存在的，必须有这层配置。
+scripts/.release-desktop.json
+
 # ---------- 开发过程杂物（截图、日志、一次性补丁脚本）----------
 dev/
 *.log
