@@ -40,6 +40,12 @@ export class AvPlayerController {
   onBuffering: (percent: number) => void = () => {};
   /** 视频真实分辨率（宽, 高），用于按原始比例显示，避免画面被拉伸 */
   onVideoSize: (width: number, height: number) => void = () => {};
+  /**
+   * 缓冲开始 / 结束（BUFFERING_START / BUFFERING_END）。
+   * BUFFERING_PERCENT 在正常播放时也会频繁抖动，撑不起「真卡住」的判定；
+   * 只有 START 之后迟迟等不到 END 才是解码器真饿死的信号。
+   */
+  onBufferState: (buffering: boolean) => void = () => {};
 
   /** 倍速档位（与 LibreTV 播放器一致） */
   static readonly SPEEDS: PlaybackSpeedOption[] = [
@@ -152,26 +158,60 @@ export class AvPlayerController {
 
   /** 设置媒体源 → 等 initialized → 绑 Surface → prepare（顺序错会导致卡死无画面） */
   private async startSource(player: media.AVPlayer, source: media.MediaSource, seekMs: number): Promise<boolean> {
-    await this.ensureIdle(player);
-    if (player.state !== 'idle') {
-      // reset 没有按时回到 idle（兜底超时走完）：强行 setMediaSource 会被拒绝，
-      // 与其静默卡住加载圈，不如明确报错让用户重试。
-      this.onError('播放器状态异常，请重试');
-      return false;
+    let p: media.AVPlayer = player;
+    let idle: boolean = await this.ensureIdle(p);
+    if (!idle) {
+      // reset 抛错 / 迟迟回不到 idle：把播放器整个重建一遍再试。
+      // 之前这里直接报「播放器状态异常，请重试」，用户看到的却是换源后
+      // 立刻弹错误页 —— 明明还有一张底牌没打。重建能跨过绝大多数僵死态。
+      const fresh: media.AVPlayer | null = await this.recreate(p);
+      if (fresh === null) {
+        this.onError('播放器状态异常，请重试');
+        return false;
+      }
+      p = fresh;
+      idle = await this.ensureIdle(p);
+      if (!idle) {
+        this.onError('播放器状态异常，请重试');
+        return false;
+      }
     }
     this.prepared = false;
     this.wantPlay = true;
     this.pendingSeekMs = seekMs > 0 ? seekMs : 0;
     const strategy: media.PlaybackStrategy = { preferredBufferDuration: 20 };
-    player.setMediaSource(source, strategy);
-    const ready: boolean = await this.waitForState(player, 'initialized', 8000);
+    p.setMediaSource(source, strategy);
+    const ready: boolean = await this.waitForState(p, 'initialized', 8000);
     if (!ready) {
       this.onError('视频源初始化超时，请重试或换源');
       return false;
     }
-    this.bindSurface(player);
-    player.prepare();
+    this.bindSurface(p);
+    p.prepare();
     return true;
+  }
+
+  /**
+   * 重建播放器实例：只保留 surfaceId，其余状态全部重来。
+   * 用于 reset 都救不回来的僵死态（换源连续失败时的典型现场）。
+   */
+  private async recreate(old: media.AVPlayer): Promise<media.AVPlayer | null> {
+    this.eventsBound = false;
+    this.player = null;
+    this.prepared = false;
+    try {
+      old.release();
+    } catch (e) {
+      // 释放失败也要继续，创建新实例才是目的
+    }
+    try {
+      const fresh: media.AVPlayer = await media.createAVPlayer();
+      this.player = fresh;
+      this.registerEvents(fresh);
+      return fresh;
+    } catch (e) {
+      return null;
+    }
   }
 
   private eventsBound: boolean = false;
@@ -248,6 +288,14 @@ export class AvPlayerController {
     player.on('bufferingUpdate', (infoType: media.BufferingInfoType, value: number) => {
       if (infoType === media.BufferingInfoType.BUFFERING_PERCENT) {
         this.onBuffering(value);
+        return;
+      }
+      if (infoType === media.BufferingInfoType.BUFFERING_START) {
+        this.onBufferState(true);
+        return;
+      }
+      if (infoType === media.BufferingInfoType.BUFFERING_END) {
+        this.onBufferState(false);
       }
     });
   }
@@ -256,36 +304,40 @@ export class AvPlayerController {
    * 媒体源只允许在 idle 状态设置。
    * 换集 / 换源 / 重试前当前可能处于 completed/playing 等状态，需先 reset 并等待回到 idle。
    */
-  private async ensureIdle(player: media.AVPlayer): Promise<void> {
+  private async ensureIdle(player: media.AVPlayer): Promise<boolean> {
     // 轮询等 idle，**不注册临时 stateChange 监听**：
     // off(临时回调) 会连带卸掉主回调，而 registerEvents 的防重复守卫
     // 又会跳过重新挂载 —— 换源后 prepared/playing 事件从此收不到，
     // play() 永远不会被调用，表现就是加载圈一直转（换源卡死 bug 根因）。
     // 换源后紧接着换集时，AVPlayer 可能还在 prepare/缓冲过渡，一次 reset
     // 未必立刻回到 idle —— 给最多 3 次机会，避免偶发「播放器状态异常」弹窗。
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       let st = '';
       try {
         st = player.state;
       } catch (e) {
-        return;
+        return false;
       }
       if (st === 'idle') {
-        return;
+        return true;
       }
       if (st === 'error' || st === 'released') {
-        return;
+        // 这两种态 reset 也救不回来，交给 recreate 处理
+        return false;
       }
       try {
         player.reset();
       } catch (e) {
-        return;
+        return false;
       }
-      const ok = await this.waitForState(player, 'idle', 1200);
+      // 换源后紧接着换集时，播放器可能还在 prepare / 缓冲过渡，
+      // 1200ms 偶尔不够，放宽到 1500ms 再判死。
+      const ok = await this.waitForState(player, 'idle', 1500);
       if (ok) {
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   /** 播放网络直链（mp4 / m3u8 / flv 等） */
@@ -424,6 +476,28 @@ export class AvPlayerController {
       player.seek(ms, media.SeekMode.SEEK_PREV_SYNC);
     } catch (e) {
       // ignore
+    }
+  }
+
+  /**
+   * 静默重同步：以指定位置做一次精确定位。
+   * 用来治「声音正常、画面冻住」—— 渲染器卡在等下一帧时，一次 seek 能强制
+   * 解码器重新出帧（用户手动拖一下进度条就是这个效果）。SEEK_CLOSEST 不会
+   * 像 SEEK_PREV_SYNC 那样往回跳到关键帧，用户看不到倒退。
+   */
+  resyncAt(positionMs: number): void {
+    const player = this.player;
+    if (player === null || !this.prepared) {
+      return;
+    }
+    let target: number = positionMs;
+    if (target < 0) {
+      target = 0;
+    }
+    try {
+      player.seek(target, media.SeekMode.SEEK_CLOSEST);
+    } catch (e) {
+      // 非 prepared/playing 态找不到位置，忽略
     }
   }
 

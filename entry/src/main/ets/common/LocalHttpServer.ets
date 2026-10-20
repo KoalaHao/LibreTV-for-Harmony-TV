@@ -12,6 +12,11 @@
 import { socket } from '@kit.NetworkKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 
+/** 单条连接的存活标记：客户端一断开就立刻停止推流 */
+class ConnState {
+  closed: boolean = false;
+}
+
 export class LocalHttpServer {
   private static inst: LocalHttpServer | null = null;
   private server: socket.TCPSocketServer | null = null;
@@ -66,14 +71,25 @@ export class LocalHttpServer {
   private handle(client: socket.TCPSocketConnection): void {
     let buf = new Uint8Array(0);
     let answered = false;
+    const state = new ConnState();
+    // 客户端一断开必须立刻停止推流。
+    // 播放器每 seek / 换集 / 重建播放器都会关连接，旧实现对着一个死 socket
+    // 继续把整个文件读完、推完，主线程被同步 IO 和成批失败的 send 按住，
+    // 外部表现就是「画面冻住、声音还在响，拖一下进度条才恢复」。
+    client.on('close', () => {
+      state.closed = true;
+    });
+    client.on('error', () => {
+      state.closed = true;
+    });
     client.on('message', (info: socket.SocketMessageInfo) => {
-      if (answered) {
+      if (answered || state.closed) {
         return;
       }
       const chunk = new Uint8Array(info.message);
       if (buf.length + chunk.length > 32768) {
         answered = true;
-        client.close();
+        LocalHttpServer.closeQuietly(client);
         return;
       }
       const merged = new Uint8Array(buf.length + chunk.length);
@@ -85,7 +101,7 @@ export class LocalHttpServer {
         return;
       }
       answered = true;
-      this.respond(client, head);
+      this.respond(client, head, state);
     });
   }
 
@@ -102,7 +118,7 @@ export class LocalHttpServer {
     return out;
   }
 
-  private async respond(client: socket.TCPSocketConnection, head: string): Promise<void> {
+  private async respond(client: socket.TCPSocketConnection, head: string, state: ConnState): Promise<void> {
     const lines: string[] = head.split('\r\n');
     let start: number = -1;
     let end: number = -1;
@@ -129,12 +145,8 @@ export class LocalHttpServer {
     }
     if (size <= 0) {
       await this.writeAll(client, LocalHttpServer.ascii(
-        'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'));
-      try {
-        client.close();
-      } catch (e) {
-        // 忽略
-      }
+        'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'), state);
+      LocalHttpServer.closeQuietly(client);
       return;
     }
     const from: number = start >= 0 ? start : 0;
@@ -152,46 +164,87 @@ export class LocalHttpServer {
       header = 'HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\nContent-Length: ' +
         len.toString() + '\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n';
     }
-    await this.writeAll(client, LocalHttpServer.ascii(header));
+    const headOk: boolean = await this.writeAll(client, LocalHttpServer.ascii(header), state);
+    if (!headOk) {
+      LocalHttpServer.closeQuietly(client);
+      return;
+    }
 
     let f: fs.File | null = null;
     try {
-      f = fs.openSync(this.file, fs.OpenMode.READ_ONLY);
+      // 异步 open / read：readSync 跑在主线程上，读几百 MB 的缓存文件时
+      // 会连带把渲染帧和触摸事件一起按住。
+      f = await fs.open(this.file, fs.OpenMode.READ_ONLY);
       const fd: number = f.fd;
-      const chunk: number = 256 * 1024;
+      // 块从 256KB 降到 128KB：单次 await 的可中断粒度更细，
+      // 也避免一口气把整个文件塞进 socket 缓冲区把内存和 GC 拖垮。
+      const chunk: number = 128 * 1024;
       let off: number = from;
-      while (off <= to) {
+      let sent: number = 0;
+      while (off <= to && !state.closed) {
         const n: number = Math.min(chunk, to - off + 1);
         const buf: ArrayBuffer = new ArrayBuffer(n);
-        const read: number = fs.readSync(fd, buf, { offset: off, length: n });
+        const read: number = await fs.read(fd, buf, { offset: off, length: n });
         if (read <= 0) {
           break;
         }
-        await this.writeAll(client, buf);
+        const ok: boolean = await this.writeAll(client, buf, state);
+        if (!ok) {
+          // 对端已断开或写失败：立刻停，别把剩下的字节空推一遍
+          break;
+        }
         off += read;
+        sent++;
+        // 每 8 块让出一次「宏任务」。连续的 await 只在微任务队列里打转，
+        // 事件循环里排队的渲染帧 / 触摸事件永远轮不到 —— 这就是卡顿的观感来源。
+        if (sent % 8 === 0) {
+          await LocalHttpServer.yieldOnce();
+        }
       }
     } catch (e) {
       // 读失败就让客户端断开
     } finally {
       if (f !== null) {
-        fs.closeSync(f);
+        try {
+          fs.closeSync(f);
+        } catch (e) {
+          // 忽略
+        }
       }
     }
+    LocalHttpServer.closeQuietly(client);
+  }
+
+  /** 发送一块数据；返回 false 表示这条连接已经不可用，外层应立即停止推流 */
+  private writeAll(client: socket.TCPSocketConnection, data: ArrayBuffer, state: ConnState): Promise<boolean> {
+    return new Promise<boolean>((resolve: (value: boolean) => void) => {
+      if (state.closed) {
+        resolve(false);
+        return;
+      }
+      client.send({ data: data }).then(() => {
+        resolve(!state.closed);
+      }).catch(() => {
+        resolve(false);
+      });
+    });
+  }
+
+  /** 让出一次宏任务，给渲染帧和触摸事件留出执行机会 */
+  private static yieldOnce(): Promise<void> {
+    return new Promise<void>((resolve: (value: void) => void) => {
+      setTimeout(() => {
+        resolve();
+      }, 0);
+    });
+  }
+
+  private static closeQuietly(client: socket.TCPSocketConnection): void {
     try {
       client.close();
     } catch (e) {
       // 忽略
     }
-  }
-
-  private writeAll(client: socket.TCPSocketConnection, data: ArrayBuffer): Promise<void> {
-    return new Promise<void>((resolve: (value: void) => void) => {
-      client.send({ data: data }).then(() => {
-        resolve();
-      }).catch(() => {
-        resolve();
-      });
-    });
   }
 
   private static ascii(text: string): ArrayBuffer {

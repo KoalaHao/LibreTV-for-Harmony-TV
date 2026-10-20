@@ -75,6 +75,10 @@ export struct PlayerPage {
   private playPending: boolean = false;
   /** 起播进行中又收到换集/换源请求：本轮完成后自动重起一次 */
   private restartQueued: boolean = false;
+  /** 上一轮 startPlay 是否真的跑过（false = 被守卫挡下、结果不可知） */
+  private startRan: boolean = false;
+  /** 上一轮 startPlay 的结果 */
+  private startOk: boolean = false;
 
   @State episodes: Episode[] = [];
   @State currentEp: number = 0;
@@ -151,6 +155,45 @@ export struct PlayerPage {
   private static readonly STALL_LIMIT: number = 3;
   /** 一次播放最多自动换几次源，超了就交回给用户 */
   private static readonly AUTO_SWITCH_MAX: number = 3;
+  /** 自动换源的过程提示：写在加载圈下面，不用 toast ——
+   *  测速那几秒画面可能自己就恢复了，弹一条转瞬即逝的 toast 看着像误报 */
+  @State loadingHint: string = '';
+
+  // ---------- 长按加速 / 长按左右滑快进快退 ----------
+  /** 长按已生效（正在加速播放） */
+  @State pressSpeed: boolean = false;
+  /** 长按后横向拖动：正在预览快进/快退目标位置 */
+  @State seekPreviewing: boolean = false;
+  /** 预览目标位置（ms） */
+  @State seekPreviewMs: number = 0;
+  /** 目标位置相对长按起点的偏移（ms），负数 = 快退 */
+  @State seekDeltaMs: number = 0;
+  /** 长按计时器 */
+  private pressTimer: number = -1;
+  /** 本次按下的起点（vp） */
+  private pressDownX: number = 0;
+  private pressDownY: number = 0;
+  /** 长按生效瞬间的播放位置：快进/快退都以它为原点，整段手势不累积漂移 */
+  private seekBaseMs: number = 0;
+  /** 长按后是否已发生明显横向拖动 */
+  private seekDragging: boolean = false;
+  /** 长按后抬手要吃掉这次 click，否则会顺带把控制条呼出来 */
+  private suppressTap: boolean = false;
+  /** 长按加速的倍速 */
+  private static readonly PRESS_SPEED: number = 2.0;
+  /** 长按判定时长（毫秒）：太短会和"轻点唤出控制条"撞车 */
+  private static readonly PRESS_DELAY_MS: number = 380;
+  /** 横向滑满一屏对应的跳转时长（毫秒） */
+  private static readonly SEEK_FULL_SPAN_MS: number = 300000;
+
+  // ---------- 离线播放「声音在走、画面冻住」自愈 ----------
+  /** 缓冲开始的时间点（0 = 当前不在缓冲） */
+  private bufferStallAt: number = 0;
+  /** 已自愈重同步的次数：治不了的源不该无限 seek */
+  private resyncCount: number = 0;
+  private resyncTimer: number = -1;
+  private static readonly RESYNC_LIMIT: number = 5;
+  private static readonly RESYNC_AFTER_MS: number = 4000;
 
   aboutToAppear(): void {
     // 播放页存活期间保持屏幕常亮：平板全屏播放时系统休眠计时一到会直接黑屏锁屏
@@ -293,6 +336,62 @@ export struct PlayerPage {
       this.videoH = height;
       this.updateSurfaceSize();
     };
+    this.player.onBufferState = (buffering: boolean) => {
+      // 只对离线播放启用：本地读盘不该出现长时间缓冲，
+      // 一旦 START 之后迟迟等不到 END，就是解码器/渲染器卡住的信号。
+      if (this.offlineDir === '' || this.released) {
+        return;
+      }
+      if (buffering) {
+        if (this.bufferStallAt === 0) {
+          this.bufferStallAt = Date.now();
+          this.scheduleResync();
+        }
+      } else {
+        this.bufferStallAt = 0;
+        this.clearResync();
+      }
+    };
+  }
+
+  /**
+   * 离线播放自愈。
+   * 本地文件几乎瞬间就能读到数据，缓冲开始后 4 秒还没结束，说明画面已经冻住了
+   * （声音走的是另一条渲染链路，所以用户听到声音正常）。
+   * 以当前位置做一次精确 seek 会让解码器重新出帧 —— 这正是用户手动拖进度条的效果。
+   */
+  private scheduleResync(): void {
+    if (this.resyncTimer >= 0 || this.released) {
+      return;
+    }
+    this.resyncTimer = setTimeout(() => {
+      this.resyncTimer = -1;
+      if (this.released || this.offlineDir === '' || !this.playing) {
+        return;
+      }
+      if (this.bufferStallAt === 0) {
+        return;
+      }
+      if (Date.now() - this.bufferStallAt < PlayerPage.RESYNC_AFTER_MS) {
+        this.scheduleResync();
+        return;
+      }
+      if (this.resyncCount >= PlayerPage.RESYNC_LIMIT) {
+        return;
+      }
+      this.resyncCount++;
+      this.player.resyncAt(this.player.currentTime());
+      // 重新计时，给这次 seek 一次生效机会；仍无起色就继续，直到上限
+      this.bufferStallAt = Date.now();
+      this.scheduleResync();
+    }, PlayerPage.RESYNC_AFTER_MS + 200);
+  }
+
+  private clearResync(): void {
+    if (this.resyncTimer >= 0) {
+      clearTimeout(this.resyncTimer);
+      this.resyncTimer = -1;
+    }
   }
 
   /** 起播后卡顿：预约 1 秒后检查进度是否停摆，停摆才弹加载圈（只预约一次） */
@@ -519,18 +618,25 @@ export struct PlayerPage {
     return ep;
   }
 
-  private async startPlay(): Promise<void> {
+  /**
+   * 起播。返回值只为「换源」这条链路服务：
+   *  true  = 这一轮真的跑完了且成功
+   *  false = 失败，或被守卫挡下（此时看 startRan 区分）
+   */
+  private async startPlay(): Promise<boolean> {
     if (this.starting || this.playPending || this.released) {
       // 起播进行中又来了换集/换源请求：记入队列，本轮完成后自动重起。
       // 静默丢弃会让用户以为「点了没反应」，还可能诱发交错起播的竞态。
       if (!this.released) {
         this.restartQueued = true;
       }
-      return;
+      return false;
     }
     this.playPending = true;
     try {
-      await this.doStartPlay();
+      this.startRan = true;
+      this.startOk = await this.doStartPlay();
+      return this.startOk;
     } finally {
       this.starting = false;
       this.playPending = false;
@@ -541,8 +647,9 @@ export struct PlayerPage {
     }
   }
 
-  private async doStartPlay(): Promise<void> {
+  private async doStartPlay(): Promise<boolean> {
     this.errorText = '';
+    this.loadingHint = '';
     // 换集/换源/重试都是「重新起播」：回到未起播状态，加载圈立即出现，
     // 同时把旧的延迟计时清掉，避免上一次的计时器误触发。
     this.hasStarted = false;
@@ -553,6 +660,9 @@ export struct PlayerPage {
     this.lastProgressAt = 0;
     this.stallCount = 0;
     this.lastStallAt = 0;
+    this.bufferStallAt = 0;
+    this.resyncCount = 0;
+    this.clearResync();
     this.clearWatchdog();
     // 离线播放只有本地一份文件，没有别的源可换，不必起表
     if (this.offlineDir === '') {
@@ -569,27 +679,26 @@ export struct PlayerPage {
         fs.closeSync(probe);
       } catch (e) {
         this.errorText = '离线文件缺失，请重新下载';
-        return;
+        return false;
       }
       const url: string = await LocalHttpServer.shared().mediaUrl(media);
       if (url === '') {
         this.errorText = '本地播放服务启动失败';
-        return;
+        return false;
       }
-      await this.player.playUrl(url, {}, this.positionMs);
-      return;
+      return await this.player.playUrl(url, {}, this.positionMs);
     }
     // 关键：VideoSurface 的 onSurfaceReady 可能早于 aboutToAppear 里发起的分集请求返回，
     // 此时 episodes 仍为空数组，直接取集会误判成「没有可用的播放地址」。
     // 因此必须等分集加载任务结束再取播放地址。
     await this.ensureEpisodesLoaded();
     if (this.released) {
-      return;
+      return false;
     }
     const ep = this.playableEpisode();
     if (ep === null || ep.url === '') {
       this.errorText = this.episodes.length === 0 ? '获取分集列表失败，请重试或换源' : '没有可用的播放地址';
-      return;
+      return false;
     }
     this.starting = true;
     this.buffering = true;
@@ -600,10 +709,9 @@ export struct PlayerPage {
       this.toast('已过滤 ' + resolved.filteredCount + ' 个广告分片');
     }
     if (resolved.kind === 'fd') {
-      await this.player.playFd(resolved.url, resolved.headers, this.positionMs);
-    } else {
-      await this.player.playUrl(resolved.url, resolved.headers, this.positionMs);
+      return await this.player.playFd(resolved.url, resolved.headers, this.positionMs);
     }
+    return await this.player.playUrl(resolved.url, resolved.headers, this.positionMs);
   }
 
   /** 等待分集加载完成；失败后允许重新拉取一次（源站限流时第二次往往能成功） */
@@ -707,6 +815,8 @@ export struct PlayerPage {
       clearTimeout(this.hideTimer);
       this.hideTimer = -1;
     }
+    this.clearPressTimer();
+    this.clearResync();
   }
 
   private clearLoadingTimer(): void {
@@ -752,9 +862,22 @@ export struct PlayerPage {
 
   private onSliderChange(value: number, mode: SliderChangeMode): void {
     if (mode === SliderChangeMode.End) {
-      this.player.seekTo(value * 1000);
-      this.positionText = Utils.formatTime(value * 1000);
+      const target: number = value * 1000;
+      this.player.seekTo(target);
+      this.applySeekUi(target);
     }
+  }
+
+  /** seek 之后同步 UI 与卡顿判定基准 */
+  private applySeekUi(ms: number): void {
+    this.positionMs = ms;
+    this.positionText = Utils.formatTime(ms);
+    this.sliderValue = Math.floor(ms / 1000);
+    // 关键：向后 seek 之后 lastPosMs 还停在旧的高位，进度要追很久才「超过」它，
+    // 这段空窗会被 scheduleStallCheck 当成长时间卡住，进而误触发自动换源。
+    this.lastPosMs = 0;
+    this.lastProgressAt = Date.now();
+    this.clearStall();
   }
 
   private selectEpisode(idx: number): void {
@@ -823,6 +946,14 @@ export struct PlayerPage {
       }
       return false;
     }
+    // 记住当前源：新源起不来时原地回滚，绝不能把用户丢在错误页上
+    const prevKey: string = this.sourceKey;
+    const prevVodId: string = this.vodId;
+    const prevEpisodes: Episode[] = this.episodes;
+    const prevEp: number = this.currentEp;
+    // 换源后从当前进度继续播放：把现在的播放位置带入新源，
+    // AvPlayerController 会在新源 prepared 后自动 seek 过去
+    const pos = this.player.currentTime();
     this.showSources = false;
     this.sourceKey = item.sourceKey;
     this.vodId = item.vodId;
@@ -831,14 +962,29 @@ export struct PlayerPage {
     if (this.currentEp >= this.episodes.length) {
       this.currentEp = this.episodes.length - 1;
     }
-    // 换源后从当前进度继续播放：把现在的播放位置带入新源，
-    // AvPlayerController 会在新源 prepared 后自动 seek 过去
-    const pos = this.player.currentTime();
     this.positionMs = pos > 0 ? pos : 0;
     this.positionText = Utils.formatTime(this.positionMs);
     this.sliderValue = Math.floor(this.positionMs / 1000);
-    this.startPlay();
-    return true;
+    this.startRan = false;
+    const played: boolean = await this.startPlay();
+    if (!this.startRan) {
+      // 被守卫排队了（上一轮起播还没结束）：新源会在本轮结束后自动起播，不算失败
+      return true;
+    }
+    if (played) {
+      return true;
+    }
+    // 新源没起来：清掉错误态、原地回滚到旧源，用户至少还能接着看
+    this.errorText = '';
+    this.restartQueued = false;
+    this.sourceKey = prevKey;
+    this.vodId = prevVodId;
+    this.episodes = prevEpisodes;
+    this.currentEp = prevEp;
+    this.startRan = false;
+    await this.startPlay();
+    this.errorText = '';
+    return false;
   }
 
   /** 起播看门狗：12 秒还没出画面，就当这一路加载失败 */
@@ -868,9 +1014,10 @@ export struct PlayerPage {
     if (this.released || this.autoSwitching) {
       return;
     }
-    // 近 1.5 秒内进度还在走 = 播放正常，别换源。
+    // 近 3 秒内进度还在走 = 播放正常，别换源。
     // 判据用「进度」而不是 playing：卡顿时 playing 依然为 true。
-    if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 1500) {
+    // 1.5 秒太短：缓冲刚恢复的那一下进度会跳一格，还是会被判成「已经卡住」。
+    if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 3000) {
       return;
     }
     this.showLoading = false;
@@ -900,20 +1047,23 @@ export struct PlayerPage {
     this.autoSwitching = true;
     this.clearWatchdog();
     this.showLoading = true;
-    this.toast('播放不畅，正在自动切换片源…');
+    // 提示走加载圈下面的小字，不再一上来就 toast：
+    // 测速要好几秒，这期间画面很可能自己缓过来了，此时若已经弹过
+    // 「正在自动切换片源」，用户看到的就是「提示刚出现，画面已正常」。
+    this.loadingHint = '正在寻找更快的片源…';
     try {
-      // 返回结果已按延迟升序排列：第一个可用的就是延时最小的
+      // 返回结果已按延迟升序排列：靠前的就是延时最小的
       const items: SpeedTestItem[] = await SearchService.speedTest(this.title, this.sourceKey, this.settings);
-      // 关键：测速要花几秒，这段时间画面可能已经恢复正常。
-      // 不复查就切，用户看到的就是「刚播起来又被换走」。
       if (this.released) {
         return;
       }
-      if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 2000) {
+      // 测速期间画面已恢复就不再切：这一步是「误切」唯一的拦截点
+      if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 3000) {
+        this.loadingHint = '';
         this.showLoading = false;
         return;
       }
-      let picked: SpeedTestItem | null = null;
+      const candidates: SpeedTestItem[] = [];
       for (const it of items) {
         if (!it.ok || it.vodId === undefined || it.vodId === '') {
           continue;
@@ -921,28 +1071,49 @@ export struct PlayerPage {
         if (it.sourceKey === this.sourceKey || this.autoTried.indexOf(it.sourceKey) >= 0) {
           continue;
         }
-        picked = it;
-        break;
+        candidates.push(it);
+        // 最多连试 2 个：再多用户就要盯着加载圈了，不如早点交回手动换源
+        if (candidates.length >= 2) {
+          break;
+        }
       }
-      if (picked === null) {
+      if (candidates.length === 0) {
+        this.loadingHint = '';
         this.showLoading = false;
         this.errorText = '没有找到可用的备用片源，请手动换源';
         return;
       }
-      const pickedName: string = picked.sourceName;
-      this.autoTried.push(picked.sourceKey);
-      const done: boolean = await this.applySource(picked, true);
-      if (done) {
-        this.toast('已切换到「' + pickedName + '」');
+      let switchedName: string = '';
+      for (const c of candidates) {
+        // 每个候选源动手前再确认一次——找源、拉详情都已花掉好几秒
+        if (this.lastProgressAt > 0 && Date.now() - this.lastProgressAt < 3000) {
+          this.loadingHint = '';
+          this.showLoading = false;
+          return;
+        }
+        this.autoTried.push(c.sourceKey);
+        const done: boolean = await this.applySource(c, true);
+        if (done) {
+          switchedName = c.sourceName;
+          break;
+        }
+        // applySource 内部已回滚到旧源并清掉错误态，这里继续试下一个候选
+      }
+      this.loadingHint = '';
+      if (switchedName !== '') {
+        this.showLoading = false;
+        this.toast('已切换到「' + switchedName + '」');
       } else {
         this.showLoading = false;
         this.errorText = '备用片源也无法播放，请手动换源';
       }
     } catch (e) {
+      this.loadingHint = '';
       this.showLoading = false;
       this.errorText = '自动换源失败，请手动换源';
     } finally {
       this.autoSwitching = false;
+      this.loadingHint = '';
     }
   }
 
@@ -1258,11 +1429,22 @@ export struct PlayerPage {
           }
         })
 
-        // 点击层：轻点画面显示/隐藏控制条（置于控制层之下，避免事件冒泡误触）
+        // 点击层：轻点画面显示/隐藏控制条（置于控制层之下，避免事件冒泡误触）。
+        // 长按加速 / 长按左右滑快进快退也挂在这一层：它铺满全屏、又是直接命中目标，
+        // 控制条隐藏时必定收得到 Touch；控制条可见时处理函数里直接让位，
+        // 保证按钮和进度条不被抢。
         Column()
           .width('100%')
           .height('100%')
+          .onTouch((event: TouchEvent) => {
+            this.handlePressTouch(event);
+          })
           .onClick(() => {
+            // 长按后抬手不该顺带把控制条呼出来
+            if (this.suppressTap) {
+              this.suppressTap = false;
+              return;
+            }
             if (!this.controlsVisible) {
               this.controlsVisible = true;
               this.scheduleHideControls();
@@ -1273,12 +1455,49 @@ export struct PlayerPage {
 
         // 加载 / 错误态
         if ((this.showLoading || this.stallLoading) && this.errorText === '') {
-          // 播放器背景是黑的，用白色圈；用主题红在暗背景上非常扎眼
-          LoadingProgress()
-            .width(44)
-            .height(44)
-            .color(Color.White)
-            .opacity(0.9)
+          Column({ space: 10 }) {
+            // 播放器背景是黑的，用白色圈；用主题红在暗背景上非常扎眼
+            LoadingProgress()
+              .width(44)
+              .height(44)
+              .color(Color.White)
+              .opacity(0.9)
+            if (this.loadingHint !== '') {
+              Text(this.loadingHint)
+                .fontSize(12)
+                .fontColor('#CCCCCC')
+                .maxLines(1)
+            }
+          }
+          .hitTestBehavior(HitTestMode.None)
+        }
+
+        // 长按加速 / 长按左右滑的状态浮层
+        if (this.pressSpeed) {
+          Column({ space: 6 }) {
+            if (this.seekPreviewing) {
+              Text(this.seekDeltaText())
+                .fontSize(24)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Color.White)
+              Text(Utils.formatTime(this.seekPreviewMs) + ' / ' +
+                (this.durationMs > 0 ? this.durationText : '--:--'))
+                .fontSize(12)
+                .fontColor('#DDDDDD')
+            } else {
+              Text(this.pressSpeedLabel())
+                .fontSize(18)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(Color.White)
+              Text('左右滑动可快进 / 快退')
+                .fontSize(11)
+                .fontColor('#BBBBBB')
+            }
+          }
+          .padding({ left: 20, right: 20, top: 14, bottom: 14 })
+          .borderRadius(14)
+          .backgroundColor('#B3000000')
+          .hitTestBehavior(HitTestMode.None)
         }
         if (this.errorText !== '') {
           Column({ space: 12 }) {
@@ -1806,6 +2025,118 @@ export struct PlayerPage {
       this.back();
       return true;
     })
+  }
+
+  private clearPressTimer(): void {
+    if (this.pressTimer >= 0) {
+      clearTimeout(this.pressTimer);
+      this.pressTimer = -1;
+    }
+  }
+
+  /**
+   * 长按加速 + 长按后左右滑快进/快退。
+   *
+   * 为什么手写 onTouch 而不用 LongPressGesture + PanGesture：
+   * 长按识别成功之后，同一根手指再起 Pan 在 ArkUI 里并不可靠（手势流已被长按吃掉）；
+   * 而 GestureGroup 的 parallel 模式又会让「上下滑调音量/亮度」被误判成横滑。
+   * 自己算时序最稳：按住 380ms 进加速 → 之后横移换算成跳转量 → 抬手才真正 seek。
+   */
+  private handlePressTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.endPress();
+      return;
+    }
+    const touches = event.touches;
+    if (touches.length === 0) {
+      return;
+    }
+    const x: number = touches[0].x;
+    const y: number = touches[0].y;
+    if (event.type === TouchType.Down) {
+      // 控制条可见时不接管：按钮和进度条就压在画面上，抢事件会让它们点不动
+      if (this.controlsVisible || this.errorText !== '') {
+        return;
+      }
+      this.clearPressTimer();
+      this.pressDownX = x;
+      this.pressDownY = y;
+      this.suppressTap = false;
+      this.pressTimer = setTimeout(() => {
+        this.pressTimer = -1;
+        if (this.released) {
+          return;
+        }
+        this.pressSpeed = true;
+        this.seekDragging = false;
+        this.seekPreviewing = false;
+        this.seekBaseMs = this.player.currentTime();
+        this.seekPreviewMs = this.seekBaseMs;
+        this.seekDeltaMs = 0;
+        // 暂停态改速度会被播放器拒绝；恢复播放时会按 speedValue 重新应用
+        if (this.playing) {
+          this.player.setSpeed(PlayerPage.PRESS_SPEED);
+        }
+      }, PlayerPage.PRESS_DELAY_MS);
+      return;
+    }
+    // 剩下的是 Move
+    if (this.pressTimer >= 0) {
+      // 还没到长按时长就动了：让位给上下滑调音量/亮度
+      if (Math.abs(x - this.pressDownX) > 12 || Math.abs(y - this.pressDownY) > 12) {
+        this.clearPressTimer();
+      }
+      return;
+    }
+    if (!this.pressSpeed) {
+      return;
+    }
+    const dx: number = x - this.pressDownX;
+    if (Math.abs(dx) < 16) {
+      return;
+    }
+    this.seekDragging = true;
+    const width: number = this.canvasW > 0 ? this.canvasW : 640;
+    let target: number = this.seekBaseMs + (dx / width) * PlayerPage.SEEK_FULL_SPAN_MS;
+    if (target < 0) {
+      target = 0;
+    }
+    if (this.durationMs > 0 && target > this.durationMs) {
+      target = this.durationMs;
+    }
+    this.seekPreviewMs = target;
+    this.seekDeltaMs = target - this.seekBaseMs;
+    this.seekPreviewing = true;
+  }
+
+  /** 抬手：恢复用户自己选的倍速；发生过横移才真正跳转 */
+  private endPress(): void {
+    this.clearPressTimer();
+    if (!this.pressSpeed) {
+      return;
+    }
+    const target: number = this.seekPreviewMs;
+    const jumped: boolean = this.seekDragging && this.seekPreviewing;
+    this.pressSpeed = false;
+    this.seekDragging = false;
+    this.seekPreviewing = false;
+    this.suppressTap = jumped;
+    // 恢复到设置里选的倍速（不一定是 1.0）
+    this.player.setSpeed(this.speedValue);
+    if (jumped) {
+      this.player.seekTo(target);
+      this.applySeekUi(target);
+    }
+  }
+
+  private pressSpeedLabel(): string {
+    return PlayerPage.PRESS_SPEED.toFixed(1) + 'x 加速中';
+  }
+
+  private seekDeltaText(): string {
+    const d: number = this.seekDeltaMs;
+    const abs: string = Utils.formatTime(Math.abs(d));
+    return d >= 0 ? '快进 +' + abs : '快退 -' + abs;
   }
 
   private infoSourceName(): string {
