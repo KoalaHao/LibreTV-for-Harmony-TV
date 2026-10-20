@@ -64,3 +64,8 @@ _*.py
 _*.json
 _*.txt
 verify_*.png
+
+# 构建前会把旧的 build / .hvigor 目录改名挪走（直接让 hvigor 删除会被沙箱拦，导致构建失败），
+# 这些 "_old_" 目录纯属临时产物，别提交
+entry/build_old_*/
+.hvigor_old_*/

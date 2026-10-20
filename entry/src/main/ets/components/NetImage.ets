@@ -9,20 +9,20 @@
 import { image } from '@kit.ImageKit';
 import { HttpClient } from '../net/HttpClient';
 
-/** 简单的 PixelMap 内存缓存（按原始 URL 去重） */
+/** 简单的 PixelMap 内存缓存（按「URL + 解码框」去重） */
 class NetImageCache {
   private static readonly map: Map<string, image.PixelMap> = new Map<string, image.PixelMap>();
   private static readonly MAX: number = 240;
 
-  static get(url: string): image.PixelMap | undefined {
-    return NetImageCache.map.get(url);
+  static get(key: string): image.PixelMap | undefined {
+    return NetImageCache.map.get(key);
   }
 
-  static put(url: string, pm: image.PixelMap): void {
+  static put(key: string, pm: image.PixelMap): void {
     if (NetImageCache.map.size >= NetImageCache.MAX) {
       NetImageCache.map.clear();
     }
-    NetImageCache.map.set(url, pm);
+    NetImageCache.map.set(key, pm);
   }
 }
 
@@ -38,10 +38,56 @@ function refererFor(url: string): string {
 export struct NetImage {
   @Prop url: string = '';
   @Prop referer: string = '';
+  /**
+   * 解码框（像素上限），默认 480×720，对应竖版海报。
+   *
+   * 关键点：解码时按原图宽高比**等比缩进**这个框，而不是把框的宽高直接当目标尺寸。
+   * 因为 DecodingOptions.desiredSize 的官方说明是「输出会被拉伸到指定尺寸」——
+   * 它不保比例。台标多是方形/横向小图，塞进竖版框就会被拉成一条，
+   * 再被 objectFit(Cover) 一裁，就成了「横着的一条扁图标」。
+   *
+   * 台标请传一个小方形框（如 200×200）：既保比例，又不会为一张 40vp 的小图
+   * 解码出 480×720 的像素图（后者约 1.35 MB/张，上百个频道能吃掉几百 MB）。
+   */
+  @Prop boxWidth: number = 480;
+  @Prop boxHeight: number = 720;
+  /** 填充方式。海报默认 Cover（裁边、不留空）；台标传 Contain，完整显示不变形 */
+  @Prop fit: ImageFit = ImageFit.Cover;
   @State pm: image.PixelMap | undefined = undefined;
 
   aboutToAppear(): void {
     this.loadImage();
+  }
+
+  /**
+   * 算解码尺寸：保持原图比例，等比缩进 boxWidth×boxHeight。
+   * 原图本身没超框时返回 undefined（按原尺寸解码，省掉一次无意义的重采样）。
+   */
+  private async decodeSizeFor(src: image.ImageSource): Promise<image.Size | undefined> {
+    let w: number = 0;
+    let h: number = 0;
+    try {
+      const info: image.ImageInfo = await src.getImageInfo();
+      w = info.size.width;
+      h = info.size.height;
+    } catch (e) {
+      return undefined;
+    }
+    if (w <= 0 || h <= 0) {
+      return undefined;
+    }
+    // 传 0 表示该方向不设上限，用原图尺寸兜底
+    const capW: number = this.boxWidth > 0 ? this.boxWidth : w;
+    const capH: number = this.boxHeight > 0 ? this.boxHeight : h;
+    if (w <= capW && h <= capH) {
+      return undefined;
+    }
+    const k: number = Math.min(capW / w, capH / h);
+    const size: image.Size = {
+      width: Math.max(1, Math.round(w * k)),
+      height: Math.max(1, Math.round(h * k))
+    };
+    return size;
   }
 
   /** 供外部在 URL 变化时刷新（父组件用 key 重建即可） */
@@ -50,7 +96,9 @@ export struct NetImage {
     if (u === '') {
       return;
     }
-    const cached = NetImageCache.get(u);
+    // 同一个 URL 可能被不同尺寸的调用方请求，缓存键要把解码框算进去
+    const key: string = u + '|' + this.boxWidth + 'x' + this.boxHeight;
+    const cached = NetImageCache.get(key);
     if (cached !== undefined) {
       this.pm = cached;
       return;
@@ -68,11 +116,14 @@ export struct NetImage {
       const buf: ArrayBuffer = res.bytes.buffer as ArrayBuffer;
       const src = image.createImageSource(buf);
       // DecodingOptions 仅支持 desiredSize（Size{width,height}），无 desiredPixelWidth/Height
-      const target: image.Size = { width: 480, height: 720 };
-      const opts: image.DecodingOptions = { desiredSize: target };
+      const opts: image.DecodingOptions = {};
+      const target: image.Size | undefined = await this.decodeSizeFor(src);
+      if (target !== undefined) {
+        opts.desiredSize = target;
+      }
       const pm = await src.createPixelMap(opts);
       await src.release();
-      NetImageCache.put(u, pm);
+      NetImageCache.put(key, pm);
       this.pm = pm;
     } catch (e) {
       // 解码失败：保持占位底色
@@ -81,15 +132,14 @@ export struct NetImage {
 
   build() {
     Stack() {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor($r('app.color.color_chip_bg'))
+      // 不再画内部占位底色：Contain 模式下图片四周会露出这层底色，
+      // 把父容器给的底板整个盖掉（台标换成深色底板时就是这么「失效」的）。
+      // 需要底色的地方由父容器的 backgroundColor 负责。
       if (this.pm !== undefined) {
         Image(this.pm)
           .width('100%')
           .height('100%')
-          .objectFit(ImageFit.Cover)
+          .objectFit(this.fit)
           .interpolation(ImageInterpolation.Medium)
       }
     }

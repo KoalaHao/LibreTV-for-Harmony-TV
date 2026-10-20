@@ -51,6 +51,14 @@
     {
       "name": "color_warning",
       "value": "#D9822B"
+    },
+    {
+      "name": "color_logo_plate",
+      "value": "#3D3D47"
+    },
+    {
+      "name": "color_logo_plate_text",
+      "value": "#F2F2F5"
     }
   ]
 }

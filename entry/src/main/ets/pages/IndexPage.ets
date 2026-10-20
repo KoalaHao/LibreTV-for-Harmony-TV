@@ -1916,32 +1916,38 @@ struct IndexPage {
                         .width('100%')
                         .textAlign(TextAlign.Start)
                     } else {
-                      Column({ space: 6 }) {
+                      Column({ space: 8 }) {
                         ForEach(group.channels.slice(0, 300), (ch: LiveChannel) => {
                           // 频道行以「台标」为主视觉：左台标 + 右侧小字频道名/节目单。
                           // 纯文字列表很难一眼认出是哪个台，台标才是 IPTV 的正确形态。
-                          Row({ space: 10 }) {
+                          Row({ space: 12 }) {
+                            // 台标容器做成横向框（64x44）：IPTV 台标多是「台号+台名」的横版图，
+                            // 方形框会把它们缩得很小，留白也难看。
                             Stack({ alignContent: Alignment.Center }) {
                               if (ch.logo !== undefined && ch.logo !== '') {
-                                NetImage({ url: ch.logo })
-                                  .width(46)
-                                  .height(30)
-                                  .borderRadius(4)
+                                // Contain + 200x200 解码框：完整保留原图比例，不再被拉成横条
+                                // （旧写法按竖版海报 480x720 解码、再 Cover 裁切，台标必然变形）
+                                NetImage({ url: ch.logo, boxWidth: 200, boxHeight: 200, fit: ImageFit.Contain })
+                                  .width(64)
+                                  .height(44)
+                                  .borderRadius(6)
                               } else {
                                 Text(ch.name.length > 0 ? ch.name.substring(0, 1) : '?')
-                                  .fontSize(14)
-                                  .fontColor($r('app.color.color_text_secondary'))
+                                  .fontSize(20)
+                                  .fontColor($r('app.color.color_logo_plate_text'))
                               }
                             }
-                            .width(46)
-                            .height(30)
-                            .backgroundColor($r('app.color.color_chip_bg'))
-                            .borderRadius(4)
+                            // 台标底板用深色：CCTV 这类台标是白字透明底，
+                            // 衬在浅色底板上等于看不见
+                            .width(64)
+                            .height(44)
+                            .backgroundColor($r('app.color.color_logo_plate'))
+                            .borderRadius(6)
                             .clip(true)
 
-                            Column({ space: 2 }) {
+                            Column({ space: 3 }) {
                               Text(ch.name)
-                                .fontSize(12)
+                                .fontSize(15)
                                 .fontColor($r('app.color.color_text'))
                                 .maxLines(1)
                                 .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1949,7 +1955,7 @@ struct IndexPage {
                                 .textAlign(TextAlign.Start)
                               if (this.epgTextFor(group, ch) !== '') {
                                 Text(this.epgTextFor(group, ch))
-                                  .fontSize(10)
+                                  .fontSize(12)
                                   .fontColor($r('app.color.color_text_secondary'))
                                   .maxLines(1)
                                   .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1961,7 +1967,8 @@ struct IndexPage {
                             .alignItems(HorizontalAlign.Start)
                           }
                           .width('100%')
-                          .padding({ left: 8, right: 4, top: 5, bottom: 5 })
+                          // 上下各 10vp：44 的台标 + 20 内边距 = 64vp 行高，点选不易误触隔壁
+                          .padding({ left: 6, right: 8, top: 10, bottom: 10 })
                           .onClick(() => {
                             this.openLive(group, ch);
                           })
