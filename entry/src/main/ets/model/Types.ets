@@ -117,6 +117,16 @@ export interface FavoriteItem {
   createdAt: number;
 }
 
+/** 直播频道收藏项：与点播 FavoriteItem 并列存储，一起进「我的收藏」 */
+export interface LiveFavoriteItem {
+  url: string;
+  name: string;
+  logo?: string;
+  sourceKey: string;
+  sourceName: string;
+  createdAt: number;
+}
+
 export interface LiveChannel {
   id: string;
   name: string;

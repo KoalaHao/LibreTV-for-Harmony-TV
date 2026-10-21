@@ -24,7 +24,11 @@ import { LocalHttpServer } from '../common/LocalHttpServer';
 import { NavIds } from '../common/NavIds';
 import { AppLifecycle } from '../common/AppLifecycle';
 import { Brand } from '../common/Brand';
+import { GlassMaterial } from '../common/GlassMaterial';
 import { latestNavParam } from '../common/NavParam';
+import { ShareService } from '../common/ShareService';
+import { ShareTarget } from '../common/ShareLink';
+import { common } from '@kit.AbilityKit';
 
 export interface PlayerPageParam {
   sourceKey: string;
@@ -102,6 +106,8 @@ export struct PlayerPage {
   @State sliderValue: number = 0;
   @State sliderMax: number = 100;
   @State controlsVisible: boolean = true;
+  /** 点播收藏态：顶部栏星标按钮的实/空心 */
+  @State favorite: boolean = false;
   @State showEpisodes: boolean = false;
   @State showSpeeds: boolean = false;
   @State showSources: boolean = false;
@@ -243,6 +249,8 @@ export struct PlayerPage {
     this.currentEp = this.episode;
     this.speedValue = this.settings.defaultSpeed;
     this.positionText = Utils.formatTime(this.positionMs);
+    // 收藏态在构造参数注入后即可读取（详情页 / 历史页都已带 sourceKey+vodId）
+    this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
     this.bindCallbacks();
     // 前后台变化回调：判断画中画有没有接管，没接管就得自己停住
     AppLifecycle.bgHandler = (background: boolean) => {
@@ -378,6 +386,8 @@ export struct PlayerPage {
     this.pic = p.pic !== undefined ? p.pic : '';
     this.lineIndex = p.lineIndex !== undefined ? p.lineIndex : 0;
     this.currentEp = p.episode;
+    // 缓存节点复用时收藏态也要跟着新参数刷新
+    this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
   }
 
   /** 把上一次留下的播放状态清干净（画面尺寸与 Surface id 保留，它们还有用） */
@@ -997,6 +1007,31 @@ export struct PlayerPage {
    * 之前这里写死 undefined，导致首页「继续观看」永远是空白灰块。
    * 优先取详情缓存（从详情页进播放页时一定有），其次沿用已有记录（从继续观看直接进播放页时）。
    */
+  /** 系统分享：带封面缩略图 + libretv:// 链接，对方点开直接起播 */
+  private shareMovie(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    if (ctx === undefined) {
+      this.toast('无法调起系统分享');
+      return;
+    }
+    const pic: string | undefined = this.resolvePic();
+    const t: ShareTarget = {
+      sourceKey: this.sourceKey,
+      vodId: this.vodId,
+      episode: this.currentEp,
+      episodeName: this.episodeName,
+      title: this.title,
+      pic: pic !== undefined ? pic : ''
+    };
+    ShareService.shareMovie(ctx, t,
+      this.episodeName !== '' ? ('正在看 ' + this.episodeName + ' · 来自 LibreTV') : '来自 LibreTV')
+      .then((ok: boolean) => {
+        if (!ok) {
+          this.toast('当前系统不支持系统分享');
+        }
+      });
+  }
+
   private resolvePic(): string | undefined {
     if (this.pic !== '') {
       return this.pic;
@@ -1014,7 +1049,12 @@ export struct PlayerPage {
   }
 
   private saveProgress(positionMs: number = -1, durationMs: number = -1): void {
-    if (this.offlineDir !== '' || !this.settings.playHistoryEnabled) {
+    // 离线播放同样要记进度。
+    // 这里原本是 `this.offlineDir !== '' ||`，等于把离线播放整条排除在播放历史之外 ——
+    // "离线续播"因此永远没有起点，从下载页进去只能从 00:00 开始。
+    // 记录字段（sourceKey/vodId/episode/positionMs）在线与离线共用一套，
+    // 顺带让首页「继续观看」也能反映离线看到哪儿了。
+    if (!this.settings.playHistoryEnabled) {
       return;
     }
     // 播放器已经释放时 currentTime() 恒为 0：back() 里刚存好的续播点会被
@@ -1131,6 +1171,24 @@ export struct PlayerPage {
     this.player.toggle();
     this.controlsVisible = true;
     this.scheduleHideControls();
+  }
+
+  /** 点播收藏：与详情页 / 直播页同一套存储，收藏后立即进「我的收藏」 */
+  private toggleFav(): void {
+    if (this.vodId === '') {
+      // 离线播放 / 未命中 vodId 时无法关联到详情，静默忽略，避免存进一条空记录
+      return;
+    }
+    const now = HistoryStore.shared().toggleFavorite({
+      sourceKey: this.sourceKey,
+      vodId: this.vodId,
+      name: this.title !== '' ? this.title : this.titleLabel(),
+      pic: this.resolvePic(),
+      sourceName: this.infoSourceName(),
+      createdAt: Date.now()
+    });
+    this.favorite = now;
+    this.toast(now ? '已收藏' : '已取消收藏');
   }
 
   private onSliderChange(value: number, mode: SliderChangeMode): void {
@@ -1870,6 +1928,34 @@ export struct PlayerPage {
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
+              // 收藏星标：点播播放页内即可收藏/取消，与详情页、直播页同款。
+              Stack({ alignContent: Alignment.Center }) {
+                Image(this.favorite ? $r('app.media.ic_player_star_filled') : $r('app.media.ic_player_star'))
+                  .width(20)
+                  .height(20)
+                  .fillColor(this.favorite ? $r('app.color.color_primary') : $r('app.color.color_text'))
+              }
+              .width(34)
+              .height(34)
+              .borderRadius(17)
+              .backgroundColor($r('app.color.color_player_scrim'))
+              .onClick(() => {
+                this.toggleFav();
+              })
+              // 分享：与详情页同一个入口，但带上「当前这一集 + 播放中」的信息
+              Stack({ alignContent: Alignment.Center }) {
+                Image($r('app.media.ic_share'))
+                  .width(20)
+                  .height(20)
+                  .fillColor($r('app.color.color_text'))
+              }
+              .width(34)
+              .height(34)
+              .borderRadius(17)
+              .backgroundColor($r('app.color.color_player_scrim'))
+              .onClick(() => {
+                this.shareMovie();
+              })
               Stack({ alignContent: Alignment.Center }) {
                 Image($r('app.media.ic_player_fullscreen'))
                   .width(18)
@@ -1888,7 +1974,17 @@ export struct PlayerPage {
               })
             }
             .width('100%')
-            .padding({ left: 14, right: 14, top: 14 })
+            // 横屏：贴屏幕物理顶边（留白会让画面顶部多出一块，看着不像全屏）。
+            // 竖屏：进播放页同样会切窗口全屏（applyWindowFullScreen(true)），
+            // 页面从 y=0 开始画，状态栏是透明浮在上面的 —— 这里必须让开
+            // 一个状态栏的高度，否则片名和返回键直接压在时间/电量上。
+            .padding({ left: 14, right: 14, top: this.landscape ? 8 : 42 })
+            // 方案 D：顶部操作栏同样是玻璃，但底色要压得比底部重 ——
+            // 它压在最亮的画面上，纯玻璃会让白字糊掉；下沿圆角是为了
+            // 让"这是一块玻璃"这件事在实机上一眼看得出来（通栏矩形太像旧版）。
+            .backgroundColor('#66000000')
+            .backgroundEffect({ radius: 20, saturation: 1.4 })
+            .borderRadius({ bottomLeft: 22, bottomRight: 22 })
 
             // 中部播放按钮：只在「已经起播过、现在处于暂停」时出现。
             // 起播前的加载阶段画面中央不该有三角，否则看着像没自动播放。
@@ -1929,7 +2025,11 @@ export struct PlayerPage {
             .justifyContent(FlexAlign.Center)
 
             // 底部控制条
-            Column({ space: 8 }) {
+            // 进度条与功能按钮之间不再留 4vp 的气口：Slider 自身在 OutSet 样式下
+            // 有一圈透明包围盒（轨道只在中间一条），再叠上 Column 间距，视觉上就有
+            // 一条明显空档。这里把 Slider 的高度收到 24vp、间距收到 0，
+            // 让「滑块 -> 按钮」贴到一起。
+            Column({ space: 0 }) {
               Slider({
                 value: this.sliderValue,
                 min: 0,
@@ -1940,6 +2040,12 @@ export struct PlayerPage {
                 .blockColor($r('app.color.color_primary'))
                 .selectedColor($r('app.color.color_primary'))
                 .trackColor('#333333')
+                // 控制条整体压扁一档：滑块瘦一圈、轨道细一点，画面少压一条
+                .blockSize({ width: 14, height: 14 })
+                .trackThickness(3)
+                // 高度压到 24：OutSet 样式的滑块默认占 40vp，轨道居中后
+                // 下方会空出约 13vp，和功能按钮之间显得空隙很大
+                .height(24)
                 .onChange((value: number, mode: SliderChangeMode) => {
                   this.onSliderChange(value, mode);
                 })
@@ -1955,12 +2061,12 @@ export struct PlayerPage {
                   // 原来是无内边距的 12sp 纯文字，手指很难点中；
                   // 改成 34vp 高的胶囊按钮，点选区域和视觉层次都更清楚。
                   Text(this.speedLabel())
-                    .fontSize(13)
+                    .fontSize(12)
                     .fontColor('#FFFFFF')
                     .backgroundColor('#26FFFFFF')
-                    .borderRadius(17)
-                    .height(34)
-                    .padding({ left: 13, right: 13 })
+                    .borderRadius(14)
+                    .height(28)
+                    .padding({ left: 11, right: 11 })
                     .textAlign(TextAlign.Center)
                     .maxLines(1)
                     .onClick(() => {
@@ -1968,12 +2074,12 @@ export struct PlayerPage {
                     })
                   if (this.episodes.length > 1) {
                     Text('选集')
-                      .fontSize(13)
+                      .fontSize(12)
                       .fontColor('#FFFFFF')
                       .backgroundColor('#26FFFFFF')
-                      .borderRadius(17)
-                      .height(34)
-                      .padding({ left: 13, right: 13 })
+                      .borderRadius(14)
+                      .height(28)
+                      .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
                       .onClick(() => {
@@ -1982,12 +2088,12 @@ export struct PlayerPage {
                   }
                   if (this.currentEp + 1 < this.episodes.length) {
                     Text('下一集')
-                      .fontSize(13)
+                      .fontSize(12)
                       .fontColor('#FFFFFF')
                       .backgroundColor('#26FFFFFF')
-                      .borderRadius(17)
-                      .height(34)
-                      .padding({ left: 13, right: 13 })
+                      .borderRadius(14)
+                      .height(28)
+                      .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
                       .onClick(() => {
@@ -2006,21 +2112,21 @@ export struct PlayerPage {
                       .width(24)
                       .height(24)
                   }
-                  .height(34)
+                  .height(28)
                   .padding({ left: 5, right: 5 })
                   .backgroundColor('#26FFFFFF')
-                  .borderRadius(17)
+                  .borderRadius(14)
                   .justifyContent(FlexAlign.Center)
 
                   // 横屏/大屏下补一个「铺满屏/适应屏」切换：车机等大屏可去掉黑边最大化画面
                   if (this.canvasW > this.canvasH && this.offlineDir === '') {
                     Text(this.fitCover ? '适应屏' : '铺满屏')
-                      .fontSize(13)
+                      .fontSize(12)
                       .fontColor('#FFFFFF')
                       .backgroundColor('#26FFFFFF')
-                      .borderRadius(17)
-                      .height(34)
-                      .padding({ left: 13, right: 13 })
+                      .borderRadius(14)
+                      .height(28)
+                      .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
                       .onClick(() => {
@@ -2030,12 +2136,12 @@ export struct PlayerPage {
                   }
                   if (this.offlineDir === '') {
                     Text('换源')
-                      .fontSize(13)
+                      .fontSize(12)
                       .fontColor('#FFFFFF')
                       .backgroundColor('#26FFFFFF')
-                      .borderRadius(17)
-                      .height(34)
-                      .padding({ left: 13, right: 13 })
+                      .borderRadius(14)
+                      .height(28)
+                      .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
                       .onClick(() => {
@@ -2048,13 +2154,28 @@ export struct PlayerPage {
               .width('100%')
             }
             .width('100%')
-            .padding({ left: 16, right: 16, bottom: 18 })
+            // bottom 只留 10：这块玻璃要一直铺到屏幕底边。
+            // 早先 18 + 外层 22 = 40vp 的透明留白，底下露出页面黑底，
+            // 看着就是"控制条浮在半空、下面还有一条安全区"。
+            .padding({ left: 16, right: 16, top: 6, bottom: 8 })
+            // 方案 D：播放页控制条用液态玻璃（薄材质 + 自动互补色 + 按压形变 + 光随指动）
+            // 底色不能用 color_panel_glass：那是跟随主题的"浅玻璃"，深色主题下是 20% 白，
+            // 压到画面上会把画面提亮，白字反而更糊。播放页永远压着视频，固定用深色底。
+            .backgroundColor('#4D000000')
+            .backgroundEffect({ radius: 26, saturation: 1.5 })
+            .systemMaterial(GlassMaterial.supported ? GlassMaterial.liquid : undefined)
+            // 上沿大圆角：通栏色带在实机上和旧版的黑色压暗条几乎分不出来，
+            // 圆角边界才能被眼睛抓到，玻璃块感才立得住。
+            // 不画描边：这条玻璃已经贴到屏幕底边，四边描边会在下方多出一条
+            // 横线（用户明确要求去掉），只靠圆角 + 亮度差表达边界。
+            .borderRadius({ topLeft: 24, topRight: 24 })
           }
           .width('100%')
           .height('100%')
-          .backgroundColor('#00000099')
-          // 画面已延伸进安全区，控制条要反向留白，否则标题贴着状态栏
-          .padding({ top: 26, bottom: 22 })
+          // 全屏播放：控制层铺满整屏，上下都不再留安全区留白。
+          // 早先 top 26 / bottom 22 是为了避开状态栏和手势条，代价是顶部影片信息
+          // 栏和底部控制条都"浮在离边一段距离的地方"，看着不像是全屏。
+          .padding({ top: 0, bottom: 0 })
         }
 
         // 滑屏调节的浮层提示（音量改由系统音量面板呈现，这里只留亮度）

@@ -6,6 +6,9 @@
  */
 
 import { AppVersion } from '../common/AppVersion';
+import { pageBgGradient } from '../common/GlassTheme';
+import { SystemInsets } from '../common/SystemInsets';
+import { BlurFade } from '../common/BlurFade';
 
 @Component
 export struct AboutPage {
@@ -48,127 +51,150 @@ export struct AboutPage {
 
   build() {
     NavDestination() {
-      Column({ space: 0 }) {
-        Row({ space: 8 }) {
-          Row() {
-            Image($r('app.media.ic_back'))
-              .width(20)
-              .height(20)
-          }
-          .width(36)
-          .height(40)
-          .justifyContent(FlexAlign.Center)
-          .onClick(() => {
-            this.navPathStack.pop();
-          })
-          Text('关于')
-            .fontSize(17)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.color_text'))
-            .layoutWeight(1)
-            .textAlign(TextAlign.Start)
-        }
-        .width('100%')
-        .height(48)
-        .padding({ left: 8, right: 16 })
+      Stack({ alignContent: Alignment.Top }) {
+        // 内容层铺满整屏：滚动内容会从下方玻璃导航条背后穿过
+        Column({ space: 0 }) {
 
-        Scroll() {
-          Column({ space: 10 }) {
-            // ---------- 使用说明 ----------
-            Column({ space: 8 }) {
-              Text('使用说明')
-                .fontSize(14)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.color_text'))
-                .width('100%')
-                .textAlign(TextAlign.Start)
-              ForEach(AboutPage.GUIDE_LINES, (line: string) => {
-                Text(line)
-                  .fontSize(12)
-                  .lineHeight(19)
-                  .fontColor($r('app.color.color_text_secondary'))
-                  .width('100%')
-                  .textAlign(TextAlign.Start)
-              }, (line: string) => line)
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor($r('app.color.color_card'))
-            .borderRadius(10)
-            .margin({ left: 16, right: 16, top: 8 })
-
-            // ---------- 关于 ----------
-            Column({ space: 6 }) {
-              Row({ space: 6 }) {
-                Text($r('app.string.brand_about_title'))
-                  .fontSize(15)
+          Scroll() {
+            Column({ space: 10 }) {
+            // 顶部占位：随内容滚走，让内容能从玻璃导航条背后滑过
+            Column()
+              .width('100%')
+              .height(56 + SystemInsets.top())
+              // ---------- 使用说明 ----------
+              Column({ space: 8 }) {
+                Text('使用说明')
+                  .fontSize(14)
                   .fontWeight(FontWeight.Medium)
                   .fontColor($r('app.color.color_text'))
-                Text('by PANPP')
-                  .fontSize(12)
-                  .fontColor($r('app.color.color_primary'))
+                  .width('100%')
+                  .textAlign(TextAlign.Start)
+                ForEach(AboutPage.GUIDE_LINES, (line: string) => {
+                  Text(line)
+                    .fontSize(12)
+                    .lineHeight(19)
+                    .fontColor($r('app.color.color_text_secondary'))
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                }, (line: string) => line)
               }
               .width('100%')
-              .justifyContent(FlexAlign.Start)
+              .padding(14)
+              .backgroundColor($r('app.color.color_glass'))
+              .borderRadius(10)
+              .margin({ left: 16, right: 16, top: 8 })
 
-              Text(this.appVersion.length > 0
-                ? '版本 ' + this.appVersion + ' · 多源聚合 · 点播 / 直播 / 离线下载'
-                : '多源聚合 · 点播 / 直播 / 离线下载')
-                .fontSize(12)
-                .fontColor($r('app.color.color_text_secondary'))
+              // ---------- 关于 ----------
+              Column({ space: 6 }) {
+                Row({ space: 6 }) {
+                  Text($r('app.string.brand_about_title'))
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.color_text'))
+                  Text('by PANPP')
+                    .fontSize(12)
+                    .fontColor($r('app.color.color_primary'))
+                }
                 .width('100%')
-                .textAlign(TextAlign.Start)
-              Text($r('app.string.brand_disclaimer'))
-                .fontSize(12)
-                .lineHeight(18)
-                .fontColor($r('app.color.color_text_secondary'))
-                .width('100%')
-                .textAlign(TextAlign.Start)
-              Text('开源协议：AGPL-3.0 · 部分实现参考 LibreTV（LibreSpark）开源项目，本应用并非该项目官方版本')
-                .fontSize(12)
-                .lineHeight(18)
-                .fontColor($r('app.color.color_text_secondary'))
-                .width('100%')
-                .textAlign(TextAlign.Start)
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor($r('app.color.color_card'))
-            .borderRadius(10)
-            .margin({ left: 16, right: 16 })
+                .justifyContent(FlexAlign.Start)
 
-            // ---------- 法律免责声明 ----------
-            Column({ space: 8 }) {
-              Text('法律免责声明')
-                .fontSize(14)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.color_text'))
-                .width('100%')
-                .textAlign(TextAlign.Start)
-              ForEach(AboutPage.DISCLAIMER_LINES, (line: string) => {
-                Text(line)
+                Text(this.appVersion.length > 0
+                  ? '版本 ' + this.appVersion + ' · 多源聚合 · 点播 / 直播 / 离线下载'
+                  : '多源聚合 · 点播 / 直播 / 离线下载')
                   .fontSize(12)
-                  .lineHeight(19)
                   .fontColor($r('app.color.color_text_secondary'))
                   .width('100%')
                   .textAlign(TextAlign.Start)
-              }, (line: string) => line)
+                Text($r('app.string.brand_disclaimer'))
+                  .fontSize(12)
+                  .lineHeight(18)
+                  .fontColor($r('app.color.color_text_secondary'))
+                  .width('100%')
+                  .textAlign(TextAlign.Start)
+                Text('开源协议：AGPL-3.0 · 部分实现参考 LibreTV（LibreSpark）开源项目，本应用并非该项目官方版本')
+                  .fontSize(12)
+                  .lineHeight(18)
+                  .fontColor($r('app.color.color_text_secondary'))
+                  .width('100%')
+                  .textAlign(TextAlign.Start)
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor($r('app.color.color_glass'))
+              .borderRadius(10)
+              .margin({ left: 16, right: 16 })
+
+              // ---------- 法律免责声明 ----------
+              Column({ space: 8 }) {
+                Text('法律免责声明')
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.color_text'))
+                  .width('100%')
+                  .textAlign(TextAlign.Start)
+                ForEach(AboutPage.DISCLAIMER_LINES, (line: string) => {
+                  Text(line)
+                    .fontSize(12)
+                    .lineHeight(19)
+                    .fontColor($r('app.color.color_text_secondary'))
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                }, (line: string) => line)
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor($r('app.color.color_glass'))
+              .borderRadius(10)
+              .margin({ left: 16, right: 16 })
             }
             .width('100%')
-            .padding(14)
-            .backgroundColor($r('app.color.color_card'))
-            .borderRadius(10)
-            .margin({ left: 16, right: 16 })
+            .padding({ bottom: 32 })
+          }
+          .scrollBar(BarState.Off)
+          .layoutWeight(1)
+        }
+        .width('100%')
+        .height('100%')
+        .linearGradient(pageBgGradient())
+        // 底色必须铺进状态栏/手势条：二级页面的内容让出了安全区，
+        // 这一层不扩的话，状态栏里透出的是窗口默认底色，
+        // 和页面渐变叠成两层，状态栏文字直接看不清。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+        // 顶部磨砂渐隐：内容从状态栏下面滚过时被这一段虚化，
+
+        // 并且往下越来越清，看不到过渡区的边缘。
+
+        BlurFade({ edge: 'top', band: SystemInsets.top() + 58, fade: 34, radius: 26 })
+
+
+        // 玻璃导航条（方案 A）：浮在内容之上，可隐约看到背后滚动内容
+          Row({ space: 8 }) {
+            Row() {
+              Image($r('app.media.ic_back'))
+                .width(20)
+                .height(20)
+            }
+            .width(36)
+            .height(40)
+            .justifyContent(FlexAlign.Center)
+            .onClick(() => {
+              this.navPathStack.pop();
+            })
+            Text('关于')
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.color_text'))
+              .layoutWeight(1)
+              .textAlign(TextAlign.Start)
           }
           .width('100%')
-          .padding({ bottom: 32 })
-        }
-        .scrollBar(BarState.Off)
-        .layoutWeight(1)
+          .height(48 + SystemInsets.top())
+          .padding({ left: 8, right: 16, top: SystemInsets.top() })
+          // 纯文字导航：去掉底色 / 磨砂 / 描边，与页面背景融为一体
       }
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.color_bg'))
     }
     .hideTitleBar(true)
   }

@@ -3,7 +3,7 @@
  */
 
 import { Store } from './Store';
-import { PlayRecord, FavoriteItem } from '../model/Types';
+import { PlayRecord, FavoriteItem, LiveFavoriteItem } from '../model/Types';
 import { EventBus, Events } from '../common/EventBus';
 
 export class HistoryStore {
@@ -54,6 +54,14 @@ export class HistoryStore {
         const oldPic: string | undefined = list[i].pic;
         if ((newPic === undefined || newPic === '') && oldPic !== undefined && oldPic !== '') {
           record.pic = oldPic;
+        }
+        // playUrl 同理：离线播放没有分集列表，写进去的是 undefined。
+        // 直接覆盖会把在线那条记录的分集地址抹掉，下次从「继续观看」进去
+        // 又得重新拉一次详情（源站限流时就卡在这里）。
+        const newUrl: string | undefined = record.playUrl;
+        const oldUrl: string | undefined = list[i].playUrl;
+        if ((newUrl === undefined || newUrl === '') && oldUrl !== undefined && oldUrl !== '') {
+          record.playUrl = oldUrl;
         }
         list[i] = record;
         found = true;
@@ -228,9 +236,13 @@ export class HistoryStore {
 
   // ---------- 直播收藏 ----------
 
-  getLiveFavorites(): string[] {
+  /**
+   * 结构化直播收藏（带频道名/台标/源信息），供「我的收藏」页展示与跳转。
+   * 向后兼容旧版裸 URL 数据：旧记录没有 name，解析时置空并跳过展示（仍计入判断）。
+   */
+  getLiveFavorites(): LiveFavoriteItem[] {
     const json = Store.shared().getJson(HistoryStore.KEY_LIVE_FAV);
-    const out: string[] = [];
+    const out: LiveFavoriteItem[] = [];
     if (json === '') {
       return out;
     }
@@ -241,7 +253,29 @@ export class HistoryStore {
       }
       for (const v of arr) {
         if (typeof v === 'string' && (v as string) !== '') {
-          out.push(v as string);
+          // 旧版裸 URL：只有地址，没有频道信息，无法进「我的收藏」展示，
+          // 但保留为可取消的占位（url 即唯一键）。
+          out.push({
+            url: v as string,
+            name: '',
+            sourceKey: '',
+            sourceName: '',
+            createdAt: 0
+          });
+        } else if (typeof v === 'object' && v !== null) {
+          const rec = v as Record<string, object>;
+          const url: string = HistoryStore.str(rec['url']);
+          if (url === '') {
+            continue;
+          }
+          out.push({
+            url: url,
+            name: HistoryStore.str(rec['name']),
+            logo: HistoryStore.optStr(rec['logo']),
+            sourceKey: HistoryStore.str(rec['sourceKey']),
+            sourceName: HistoryStore.str(rec['sourceName']),
+            createdAt: HistoryStore.num(rec['createdAt'], 0)
+          });
         }
       }
     } catch (e) {
@@ -253,30 +287,42 @@ export class HistoryStore {
   isLiveFavorite(url: string): boolean {
     const list = this.getLiveFavorites();
     for (const v of list) {
-      if (v === url) {
+      if (v.url === url) {
         return true;
       }
     }
     return false;
   }
 
-  toggleLiveFavorite(url: string): boolean {
+  toggleLiveFavorite(item: LiveFavoriteItem): boolean {
     const list = this.getLiveFavorites();
     let exists = false;
-    const next: string[] = [];
+    const next: LiveFavoriteItem[] = [];
     for (const v of list) {
-      if (v === url) {
+      if (v.url === item.url) {
         exists = true;
       } else {
         next.push(v);
       }
     }
     if (!exists) {
-      next.unshift(url);
+      next.unshift(item);
     }
     Store.shared().putJson(HistoryStore.KEY_LIVE_FAV, JSON.stringify(next));
     EventBus.emit(Events.LIVE_FAV_CHANGED);
     return !exists;
+  }
+
+  removeLiveFavorite(url: string): void {
+    const list = this.getLiveFavorites();
+    const next: LiveFavoriteItem[] = [];
+    for (const v of list) {
+      if (v.url !== url) {
+        next.push(v);
+      }
+    }
+    Store.shared().putJson(HistoryStore.KEY_LIVE_FAV, JSON.stringify(next));
+    EventBus.emit(Events.LIVE_FAV_CHANGED);
   }
 
   // ---------- 解析 ----------

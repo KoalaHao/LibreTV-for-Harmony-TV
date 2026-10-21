@@ -15,6 +15,9 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 /** 单条连接的存活标记：客户端一断开就立刻停止推流 */
 class ConnState {
   closed: boolean = false;
+  client: socket.TCPSocketConnection | null = null;
+  /** 连接建立时刻：用来判断谁是「最新那个请求」 */
+  bornAt: number = 0;
 }
 
 export class LocalHttpServer {
@@ -22,6 +25,14 @@ export class LocalHttpServer {
   private server: socket.TCPSocketServer | null = null;
   private port: number = 0;
   private file: string = '';
+  /**
+   * 当前唯一在推流的连接。
+   * 播放器每次 seek / 重建播放器都会新开一条连接，旧的那条在我们这边往往还没
+   * 感知到 FIN。两条流并行推同一个文件，等于把主线程的喂数据预算分成两半，
+   * 结果两条都喂不饱 —— 表现就是「声音在走、画面卡住」。
+   * 所以新请求一到就把旧连接掐掉：播放器只关心最新那条。
+   */
+  private active: ConnState | null = null;
 
   static shared(): LocalHttpServer {
     if (!LocalHttpServer.inst) {
@@ -72,6 +83,8 @@ export class LocalHttpServer {
     let buf = new Uint8Array(0);
     let answered = false;
     const state = new ConnState();
+    state.client = client;
+    state.bornAt = Date.now();
     // 客户端一断开必须立刻停止推流。
     // 播放器每 seek / 换集 / 重建播放器都会关连接，旧实现对着一个死 socket
     // 继续把整个文件读完、推完，主线程被同步 IO 和成批失败的 send 按住，
@@ -119,6 +132,16 @@ export class LocalHttpServer {
   }
 
   private async respond(client: socket.TCPSocketConnection, head: string, state: ConnState): Promise<void> {
+    // 新请求优先：先把上一条还在推的流掐掉（见 active 的注释）。
+    // 必须在写响应头之前做，否则旧连接会继续抢主线程时间片。
+    const prev: ConnState | null = this.active;
+    if (prev !== null && prev !== state) {
+      prev.closed = true;
+      if (prev.client !== null) {
+        LocalHttpServer.closeQuietly(prev.client);
+      }
+    }
+    this.active = state;
     const lines: string[] = head.split('\r\n');
     let start: number = -1;
     let end: number = -1;
@@ -139,7 +162,10 @@ export class LocalHttpServer {
     }
     let size: number = 0;
     try {
-      size = fs.statSync(this.file).size;
+      // 异步取文件大小：statSync 虽小，但也在主线程上做一次系统调用，
+      // 播放器频繁 seek 时会被放大成可感知的顿挫。
+      const st: fs.Stat = await fs.stat(this.file);
+      size = st.size;
     } catch (e) {
       size = 0;
     }
@@ -176,11 +202,10 @@ export class LocalHttpServer {
       // 会连带把渲染帧和触摸事件一起按住。
       f = await fs.open(this.file, fs.OpenMode.READ_ONLY);
       const fd: number = f.fd;
-      // 块从 256KB 降到 128KB：单次 await 的可中断粒度更细，
-      // 也避免一口气把整个文件塞进 socket 缓冲区把内存和 GC 拖垮。
-      const chunk: number = 128 * 1024;
+      // 块从 128KB 降到 64KB：单次占用的主线程时间更短，
+      // 也更接近「一块数据 ≈ 一帧的时间预算」，渲染线程不会被挤掉。
+      const chunk: number = 64 * 1024;
       let off: number = from;
-      let sent: number = 0;
       while (off <= to && !state.closed) {
         const n: number = Math.min(chunk, to - off + 1);
         const buf: ArrayBuffer = new ArrayBuffer(n);
@@ -188,25 +213,35 @@ export class LocalHttpServer {
         if (read <= 0) {
           break;
         }
-        const ok: boolean = await this.writeAll(client, buf, state);
+        // read 返回的字节数可能小于 n（文件尾 / 被截断），多出来的那截是未初始化内存，
+        // 原样发出去会让播放器解析到垃圾数据，直接按实际长度截断。
+        const out: ArrayBuffer = read === n ? buf : buf.slice(0, read);
+        const ok: boolean = await this.writeAll(client, out, state);
         if (!ok) {
           // 对端已断开或写失败：立刻停，别把剩下的字节空推一遍
           break;
         }
         off += read;
-        sent++;
-        // 每 8 块让出一次「宏任务」。连续的 await 只在微任务队列里打转，
-        // 事件循环里排队的渲染帧 / 触摸事件永远轮不到 —— 这就是卡顿的观感来源。
-        if (sent % 8 === 0) {
-          await LocalHttpServer.yieldOnce();
-        }
+        // 每一块都让出一次「宏任务」。
+        // 之前是每 8 块（=1MB）才让一次，遇到大文件时这一段连续 await
+        // 全在微任务队列里打转，事件循环里排着的渲染帧 / 触摸事件一直轮不到 ——
+        // 现场就是「画面卡住、声音还在走」。改成逐块 yield，
+        // 单次占用压到毫秒级，渲染线程永远有插队的机会。
+        // 代价是吞吐被 setTimeout(0) 的调度粒度限制（约 10~20MB/s），
+        // 而离线播放的实际码率通常只有 1~3MB/s，余量足够。
+        await LocalHttpServer.yieldOnce();
       }
     } catch (e) {
       // 读失败就让客户端断开
     } finally {
+      // 这条流结束（正常推完 / 被顶掉 / 出错）都要让出「当前活跃连接」的位置，
+      // 否则下一个请求会去关一个早就没人用的句柄。
+      if (this.active === state) {
+        this.active = null;
+      }
       if (f !== null) {
         try {
-          fs.closeSync(f);
+          await fs.close(f);
         } catch (e) {
           // 忽略
         }

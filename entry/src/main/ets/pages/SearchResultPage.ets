@@ -7,9 +7,12 @@ import { SearchService } from '../model/SearchService';
 import { SettingsStore } from '../data/SettingsStore';
 import { HistoryStore } from '../data/HistoryStore';
 import { Utils } from '../common/Utils';
+import { pageBgGradient } from '../common/GlassTheme';
 import { EmptyView, LoadingView } from '../components/CommonWidgets';
 import { DetailPageParam } from './DetailPage';
 import { latestNavParam } from '../common/NavParam';
+import { SystemInsets } from '../common/SystemInsets';
+import { BlurFade } from '../common/BlurFade';
 
 export interface SearchPageParam {
   keyword: string;
@@ -75,138 +78,164 @@ export struct SearchResultPage {
 
   build() {
     NavDestination() {
-      Column({ space: 0 }) {
-        Row({ space: 8 }) {
-          Row() {
-            Image($r('app.media.ic_back'))
-              .width(20)
-              .height(20)
-          }
-          .width(32)
-          .height(40)
-          .justifyContent(FlexAlign.Center)
-          .onClick(() => {
-            this.navPathStack.pop();
-          })
-          Search({
-            placeholder: '搜索电影 / 电视剧',
-            value: $$this.searchValue
-          })
-            .layoutWeight(1)
-            .height(36)
-            .searchButton('搜索', { fontSize: 14, fontColor: $r('app.color.color_primary') })
-            .onSubmit((value: string) => {
-              this.runSearch();
-            })
-        }
-        .width('100%')
-        .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      Stack({ alignContent: Alignment.Top }) {
+        // 内容层铺满整屏：滚动内容会从下方玻璃导航条背后穿过
+        Column({ space: 0 }) {
 
-        if (this.loading) {
-          LoadingView()
-        } else if (!this.searched) {
-          this.historyPanel()
-        } else if (this.results.length === 0) {
-          Column({ space: 8 }) {
-            EmptyView({ emptyText: '没有找到相关视频' })
-            if (this.failedCount > 0) {
-              Text('有 ' + this.failedCount + ' 个源请求失败，可前往「视频源管理」检查')
-                .fontSize(12)
-                .fontColor($r('app.color.color_text_secondary'))
-            }
-          }
-        } else {
-          Column({ space: 0 }) {
-            Row() {
-              Text('共 ' + this.results.length + ' 个结果')
-                .fontSize(12)
-                .fontColor($r('app.color.color_text_secondary'))
-                .layoutWeight(1)
+          if (this.loading) {
+            LoadingView()
+          } else if (!this.searched) {
+            this.historyPanel()
+          } else if (this.results.length === 0) {
+            Column({ space: 8 }) {
+              EmptyView({ emptyText: '没有找到相关视频' })
               if (this.failedCount > 0) {
-                Text(this.failedCount + ' 个源失败')
+                Text('有 ' + this.failedCount + ' 个源请求失败，可前往「视频源管理」检查')
                   .fontSize(12)
-                  .fontColor($r('app.color.color_warning'))
+                  .fontColor($r('app.color.color_text_secondary'))
               }
             }
-            .width('100%')
-            .padding({ left: 16, right: 16, bottom: 6 })
-
+          } else {
             List({ space: 10 }) {
-              ForEach(this.results, (v: MergedVideo) => {
-                ListItem() {
-                  Row({ space: 10 }) {
-                    if (v.pic !== undefined && v.pic !== '') {
-                      Image(v.pic)
-                        .width(88)
-                        .height(120)
-                        .objectFit(ImageFit.Cover)
-                        .borderRadius(8)
-                        .backgroundColor($r('app.color.color_chip_bg'))
-                    } else {
-                      Column()
-                        .width(88)
-                        .height(120)
-                        .backgroundColor($r('app.color.color_chip_bg'))
-                        .borderRadius(8)
-                    }
-                    Column({ space: 6 }) {
-                      Text(v.name)
-                        .fontSize(15)
-                        .fontWeight(FontWeight.Medium)
-                        .fontColor($r('app.color.color_text'))
-                        .maxLines(2)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .textAlign(TextAlign.Start)
-                        .width('100%')
-                      Row({ space: 6 }) {
-                        if (v.year !== undefined && v.year !== '') {
-                          Text(v.year)
-                            .fontSize(11)
-                            .fontColor($r('app.color.color_text_secondary'))
-                        }
-                        if (v.typeName !== undefined && v.typeName !== '') {
-                          Text(v.typeName)
-                            .fontSize(11)
-                            .fontColor($r('app.color.color_text_secondary'))
-                        }
-                        if (v.area !== undefined && v.area !== '') {
-                          Text(v.area)
-                            .fontSize(11)
-                            .fontColor($r('app.color.color_text_secondary'))
-                        }
-                      }
-                      .width('100%')
-                      if (v.remarks !== undefined && v.remarks !== '') {
-                        Text(v.remarks)
-                          .fontSize(11)
-                          .fontColor($r('app.color.color_primary'))
-                      }
-                      Text(v.items.length + ' 个播放源')
-                        .fontSize(11)
-                        .fontColor($r('app.color.color_text_secondary'))
-                    }
+              ListItem() {
+                Row() {
+                  Text('共 ' + this.results.length + ' 个结果')
+                    .fontSize(12)
+                    .fontColor($r('app.color.color_text_secondary'))
                     .layoutWeight(1)
-                    .alignItems(HorizontalAlign.Start)
+                  if (this.failedCount > 0) {
+                    Text(this.failedCount + ' 个源失败')
+                      .fontSize(12)
+                      .fontColor($r('app.color.color_warning'))
                   }
-                  .width('100%')
-                  .padding(10)
-                  .backgroundColor($r('app.color.color_card'))
-                  .borderRadius(10)
-                  .onClick(() => {
-                    this.openDetail(v);
-                  })
                 }
-              }, (v: MergedVideo) => Utils.normalizeTitle(v.name) + '|' + (v.year !== undefined ? v.year : ''))
+                .width('100%')
+                .padding({ left: 0, right: 0, bottom: 6 })
+              }
+            // 顶部占位：随内容滚走，让列表能从玻璃导航条背后滑过
+            ListItem() {
+              Column()
+                .width('100%')
+                .height(56 + SystemInsets.top())
             }
-            .layoutWeight(1)
-            .scrollBar(BarState.Off)
-            .padding({ left: 16, right: 16, bottom: 16 })
+                ForEach(this.results, (v: MergedVideo) => {
+                  ListItem() {
+                    Row({ space: 10 }) {
+                      if (v.pic !== undefined && v.pic !== '') {
+                        Image(v.pic)
+                          .width(88)
+                          .height(120)
+                          .objectFit(ImageFit.Cover)
+                          .borderRadius(8)
+                          .backgroundColor($r('app.color.color_chip_bg'))
+                      } else {
+                        Column()
+                          .width(88)
+                          .height(120)
+                          .backgroundColor($r('app.color.color_chip_bg'))
+                          .borderRadius(8)
+                      }
+                      Column({ space: 6 }) {
+                        Text(v.name)
+                          .fontSize(15)
+                          .fontWeight(FontWeight.Medium)
+                          .fontColor($r('app.color.color_text'))
+                          .maxLines(2)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .textAlign(TextAlign.Start)
+                          .width('100%')
+                        Row({ space: 6 }) {
+                          if (v.year !== undefined && v.year !== '') {
+                            Text(v.year)
+                              .fontSize(11)
+                              .fontColor($r('app.color.color_text_secondary'))
+                          }
+                          if (v.typeName !== undefined && v.typeName !== '') {
+                            Text(v.typeName)
+                              .fontSize(11)
+                              .fontColor($r('app.color.color_text_secondary'))
+                          }
+                          if (v.area !== undefined && v.area !== '') {
+                            Text(v.area)
+                              .fontSize(11)
+                              .fontColor($r('app.color.color_text_secondary'))
+                          }
+                        }
+                        .width('100%')
+                        if (v.remarks !== undefined && v.remarks !== '') {
+                          Text(v.remarks)
+                            .fontSize(11)
+                            .fontColor($r('app.color.color_primary'))
+                        }
+                        Text(v.items.length + ' 个播放源')
+                          .fontSize(11)
+                          .fontColor($r('app.color.color_text_secondary'))
+                      }
+                      .layoutWeight(1)
+                      .alignItems(HorizontalAlign.Start)
+                    }
+                    .width('100%')
+                    .padding(10)
+                    .backgroundColor($r('app.color.color_glass'))
+                    .borderRadius(10)
+                    .onClick(() => {
+                      this.openDetail(v);
+                    })
+                  }
+                }, (v: MergedVideo) => Utils.normalizeTitle(v.name) + '|' + (v.year !== undefined ? v.year : ''))
+              }
+              .layoutWeight(1)
+              .scrollBar(BarState.Off)
+              .padding({ left: 16, right: 16, bottom: 16 })
           }
         }
+        .width('100%')
+        .height('100%')
+        .linearGradient(pageBgGradient())
+        // 底色必须铺进状态栏/手势条：二级页面的内容让出了安全区，
+        // 这一层不扩的话，状态栏里透出的是窗口默认底色，
+        // 和页面渐变叠成两层，状态栏文字直接看不清。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+        // 顶部磨砂渐隐：内容从状态栏下面滚过时被这一段虚化，
+
+        // 并且往下越来越清，看不到过渡区的边缘。
+
+        BlurFade({ edge: 'top', band: SystemInsets.top() + 58, fade: 34, radius: 26 })
+
+
+        // 玻璃导航条（方案 A）：浮在内容之上，可隐约看到背后滚动内容
+          Row({ space: 8 }) {
+            Row() {
+              Image($r('app.media.ic_back'))
+                .width(20)
+                .height(20)
+            }
+            .width(32)
+            .height(40)
+            .justifyContent(FlexAlign.Center)
+            .onClick(() => {
+              this.navPathStack.pop();
+            })
+            Search({
+              placeholder: '搜索电影 / 电视剧',
+              value: $$this.searchValue
+            })
+              .layoutWeight(1)
+              .height(36)
+              .searchButton('搜索', { fontSize: 14, fontColor: $r('app.color.color_primary') })
+              .onSubmit((value: string) => {
+                this.runSearch();
+              })
+          }
+          .width('100%')
+          .padding({ left: 12, right: 12, top: 8 + SystemInsets.top(), bottom: 8 })
+          .backgroundColor($r('app.color.color_nav_glass'))
+          .backgroundEffect({ radius: 18, saturation: 1.6 })
+          .border({ width: { bottom: 1 }, color: $r('app.color.color_nav_border') })
       }
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.color_bg'))
     }
     .hideTitleBar(true)
     .onShown(() => {

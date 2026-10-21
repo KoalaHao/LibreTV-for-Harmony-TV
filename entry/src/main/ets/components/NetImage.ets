@@ -7,7 +7,7 @@
  */
 
 import { image } from '@kit.ImageKit';
-import { HttpClient } from '../net/HttpClient';
+import { ImageBytes } from '../common/ImageBytes';
 
 /** 简单的 PixelMap 内存缓存（按「URL + 解码框」去重） */
 class NetImageCache {
@@ -24,14 +24,6 @@ class NetImageCache {
     }
     NetImageCache.map.set(key, pm);
   }
-}
-
-/** 按图片域名推断所需 Referer */
-function refererFor(url: string): string {
-  if (url.indexOf('doubanio.com') >= 0 || url.indexOf('douban.com') >= 0) {
-    return 'https://movie.douban.com/';
-  }
-  return '';
 }
 
 @Component
@@ -103,17 +95,13 @@ export struct NetImage {
       this.pm = cached;
       return;
     }
-    const headers: Record<string, string> = { 'User-Agent': HttpClient.UA };
-    const ref = this.referer !== '' ? this.referer : refererFor(u);
-    if (ref !== '') {
-      headers['Referer'] = ref;
-    }
-    const res = await HttpClient.getBytes(u, headers, 12000);
-    if (!res.ok || res.bytes.length === 0) {
+    // 走共享字节缓存：与海报取色（PosterColor）复用同一份字节，
+    // 同一张海报不会被下载两次。
+    const buf: ArrayBuffer = await ImageBytes.fetch(u, this.referer);
+    if (buf.byteLength === 0) {
       return;
     }
     try {
-      const buf: ArrayBuffer = res.bytes.buffer as ArrayBuffer;
       const src = image.createImageSource(buf);
       // DecodingOptions 仅支持 desiredSize（Size{width,height}），无 desiredPixelWidth/Height
       const opts: image.DecodingOptions = {};

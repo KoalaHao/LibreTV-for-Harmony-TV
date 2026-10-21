@@ -58,14 +58,34 @@ scripts/.release-desktop.json
 dev/
 *.log
 *.log.*
+
+# 一次性补丁脚本 / hdc 抓下来的布局 JSON / 构建日志
 patch_*.py
 _patch_*.py
 _*.py
 _*.json
 _*.txt
-verify_*.png
 
-# 构建前会把旧的 build / .hvigor 目录改名挪走（直接让 hvigor 删除会被沙箱拦，导致构建失败），
-# 这些 "_old_" 目录纯属临时产物，别提交
-entry/build_old_*/
-.hvigor_old_*/
+# 真机诊断截图（_z1.jpeg、_crop_top.png 这类），以及 verify_ 前缀的验证图
+_*.png
+_*.jpeg
+_*.jpg
+_*.webp
+verify_*.png
+verify_*.jpeg
+verify_*.jpg
+
+# 构建前会把旧的 build / .hvigor 目录改名挪走（直接让 hvigor 删除会被沙箱拦，导致构建失败）。
+# 历史上有过两种命名：更早的 "_old_" 和现在的 "_bak_<时间戳>"，两种都要挡掉 ——
+# 一个 build_bak 目录就有几十 MB，混进提交会把仓库撑爆。
+/entry/build_old_*/
+/entry/build_bak_*/
+/.hvigor_old_*/
+/.hvigor_bak_*/
+/hvigor_old_*/
+/hvigor_bak_*/
+
+# ---------- 压缩包 / 离线产物 ----------
+*.zip
+*.7z
+*.rar

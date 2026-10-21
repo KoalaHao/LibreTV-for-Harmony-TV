@@ -501,7 +501,14 @@ export struct LivePlayerPage {
   }
 
   private toggleFav(): void {
-    const now = HistoryStore.shared().toggleLiveFavorite(this.channelUrl);
+    const now = HistoryStore.shared().toggleLiveFavorite({
+      url: this.channelUrl,
+      name: this.channelName,
+      logo: this.logo !== '' ? this.logo : undefined,
+      sourceKey: this.sourceKey,
+      sourceName: this.sourceName,
+      createdAt: Date.now()
+    });
     this.favorite = now;
     this.toast(now ? '已收藏该频道' : '已取消收藏');
   }
@@ -1059,7 +1066,9 @@ export struct LivePlayerPage {
               })
             }
             .width('100%')
-            .padding({ left: 14, right: 14, top: 14 })
+            // 顶部栏位置与点播全屏页保持一致：横屏贴屏幕边缘 8vp
+            // （原来固定 14 + 外层 26 = 40vp，横屏全屏下离顶边太远，比点播页低一大截）
+            .padding({ left: 14, right: 14, top: this.landscape ? 8 : 42 })
 
             // 中部按钮：加载阶段不显示三角，只有「起播过且当前暂停」才出现
             Row() {
@@ -1129,7 +1138,9 @@ export struct LivePlayerPage {
           .width('100%')
           .height('100%')
           .backgroundColor('#00000099')
-          .padding({ top: 26, bottom: 22 })
+          // 上沿不再额外让 26：让位交给顶部栏自己的 padding 控制，
+          // 否则横屏下顶部栏会被推到 40vp —— 比点播页低 32vp
+          .padding({ top: 0, bottom: 22 })
         }
       }
       .width('100%')

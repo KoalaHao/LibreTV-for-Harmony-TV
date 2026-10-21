@@ -53,7 +53,9 @@ export class DevicePolicy {
       return;
     }
     try {
-      win.setWindowLayoutFullScreen(false).catch(() => {
+      // 全应用都是沉浸式布局，这里「恢复」的应该是全屏，而不是退出全屏 ——
+      // 早先写成 false，从播放页返回后主界面会突然退回安全区内，整页被下移 133px。
+      win.setWindowLayoutFullScreen(true).catch(() => {
         // 个别系统版本/分屏场景会拒绝，忽略
       });
     } catch (e) {

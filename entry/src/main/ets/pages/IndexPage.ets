@@ -37,6 +37,10 @@ import { SourcesPage } from './SourcesPage';
 import { DownloadsPage } from './DownloadsPage';
 import { SettingsPage } from './SettingsPage';
 import { AboutPage } from './AboutPage';
+import { SystemInsets } from '../common/SystemInsets';
+import { BlurFade } from '../common/BlurFade';
+import { DeepLink, ShareLink, ShareTarget } from '../common/ShareLink';
+import { SearchService } from '../model/SearchService';
 
 @Observed
 class LiveGroupState {
@@ -138,6 +142,27 @@ const REC_FILTER_ALL: string = '全部';
  */
 const LIVE_COLLAPSE_ROWS: number = 36;
 
+/**
+ * 展开的直播源卡片底部额外留白（vp），给「收起频道列表」浮层让位。
+ *
+ * 为什么不交给 List 的 padding 一次做完：
+ * ArkUI 的 List 把列表项**裁剪在内容盒（padding box）边缘**，padding 区永远露出
+ * 页面底色，列表项再怎么高也压不过去（这就是「展开界面没有最大化」的成因）。
+ * 所以 List 的 padding 只负责「让卡片底边停在胶囊之上」（LIVE_EXPAND_BOTTOM），
+ * 卡片内部的这段留白则由卡片自己的下内边距承担 —— 滚到末尾时最后一行频道
+ * 才不会被浮层压住点不到。
+ * 取值：卡片底边距内容区底 76vp，收起按钮上沿距内容区底 144vp（见 LIVE_COLLAPSE_LIFT），
+ * 差 68vp，再留 16 缓冲 → 84。
+ */
+const LIVE_EXPAND_TAIL: number = 84;
+
+/**
+ * 展开「长频道」源时，List 的底部留白（vp）。
+ * 内容区底边 = 屏幕内容底（y≈2743），底部胶囊占据最下面 66vp（y≈2512 起），
+ * 取 76 → 卡片下沿落在 y≈2477，稳稳停在胶囊上方，且仍在「收起」按钮之下。
+ */
+const LIVE_EXPAND_BOTTOM: number = 76;
+
 @Entry
 @Component
 struct IndexPage {
@@ -149,8 +174,17 @@ struct IndexPage {
   private historyCb: () => void = () => {};
   private sourcesCb: () => void = () => {};
   private downloadsCb: () => void = () => {};
+  private liveFavCb: () => void = () => {};
 
   @State activeTab: number = 0;
+  /**
+   * 导航胶囊的「光追」反馈：记录光斑落在哪个 tab 上，以及光的扩散进度。
+   * 三个字段都必须同步驱动同一个 tabItem 的 opacity / scale，
+   * 否则动画只改透明度、看起来像「闪一下」而不是「从图标中心扩出去」。
+   */
+  @State navGlowTab: number = -1;
+  @State navGlowAlpha: number = 0;
+  @State navGlowScale: number = 0.5;
   @State searchValue: string = '';
   @State homeHistory: PlayRecord[] = [];
   @State recommendItems: RecommendItem[] = [];
@@ -195,6 +229,8 @@ struct IndexPage {
   private liveScroller: Scroller = new Scroller();
   /** 首页主滚动容器：内容上方区块高度变化时用它补偿偏移 */
   private homeScroller: Scroller = new Scroller();
+  /** 是否已经量到过「继续观看」区块的高度（首帧不补偿滚动，见 onAreaChange 注释） */
+  private historyBlockMeasured: boolean = false;
   /** 「继续观看」区块当前高度（vp），用于算增量 */
   private historyBlockH: number = 0;
   /** 用户最后一次滚动到的位置：播放页会把屏幕转横再转回，
@@ -257,9 +293,18 @@ struct IndexPage {
     this.downloadsCb = () => {
       this.refreshCounts();
     };
+    this.liveFavCb = () => {
+      // 直播收藏变化（直播页收藏/取消频道）：刷新「我的」页收藏计数
+      this.refreshCounts();
+    };
+    // 分享链接的落点：必须用箭头函数（成员方法当回调会丢 this）
+    DeepLink.attach((link: string) => {
+      this.onSharedLink(link);
+    });
     EventBus.on(Events.HISTORY_CHANGED, this.historyCb);
     EventBus.on(Events.SOURCES_CHANGED, this.sourcesCb);
     EventBus.on(Events.DOWNLOADS_CHANGED, this.downloadsCb);
+    EventBus.on(Events.LIVE_FAV_CHANGED, this.liveFavCb);
   }
 
   aboutToDisappear(): void {
@@ -270,6 +315,77 @@ struct IndexPage {
     EventBus.off(Events.HISTORY_CHANGED, this.historyCb);
     EventBus.off(Events.SOURCES_CHANGED, this.sourcesCb);
     EventBus.off(Events.DOWNLOADS_CHANGED, this.downloadsCb);
+    EventBus.off(Events.LIVE_FAV_CHANGED, this.liveFavCb);
+    DeepLink.detach();
+  }
+
+  /**
+   * 别人分享过来的链接：直接起播，不绕详情页。
+   *
+   * 延迟 400ms 再 push：冷启动时本方法是在 aboutToAppear 里被同步调到的，
+   * 那一刻 Navigation 的节点还没构建完，pushPath 会被吞掉（表现为"点了链接没反应，
+   * 但要等一会儿"）。等首帧画完再压栈才稳。
+   */
+  private onSharedLink(link: string): void {
+    const t: ShareTarget | null = ShareLink.parse(link);
+    if (t === null) {
+      return;
+    }
+    setTimeout(() => {
+      this.openSharedTarget(t);
+    }, 400);
+  }
+
+  private async openSharedTarget(t: ShareTarget): Promise<void> {
+    let useSource: string = t.sourceKey;
+    let useVod: string = t.vodId;
+    // 对方装的是别的源（每个人的源列表都不一样）→ 按片名在本机各源里找一部同名的
+    let matched: boolean = false;
+    for (const s of SourceManager.shared().getVodSources()) {
+      if (s.key === t.sourceKey) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched && t.title !== '') {
+      this.toast('本机没有分享的片源，正在自动匹配同名影片');
+      try {
+        const res = await SearchService.aggregate(t.title, SettingsStore.shared().get());
+        let pick: number = -1;
+        // 先找同名，找不到再退而求其次取第一条有片源的
+        for (let i = 0; i < res.merged.length; i++) {
+          if (res.merged[i].items.length > 0 && res.merged[i].name === t.title) {
+            pick = i;
+            break;
+          }
+        }
+        if (pick < 0) {
+          for (let i = 0; i < res.merged.length; i++) {
+            if (res.merged[i].items.length > 0) {
+              pick = i;
+              break;
+            }
+          }
+        }
+        if (pick >= 0) {
+          useSource = res.merged[pick].items[0].sourceKey;
+          useVod = res.merged[pick].items[0].vodId;
+        }
+      } catch (e) {
+        // 搜索失败就按原链接试：源可能只是被停用，播放页仍能拉到详情
+      }
+    }
+    const p: PlayerPageParam = {
+      sourceKey: useSource,
+      vodId: useVod,
+      episode: t.episode,
+      episodeName: t.episodeName,
+      title: t.title,
+      positionMs: 0,
+      offlineDir: '',
+      pic: t.pic
+    };
+    this.navStack.pushPath({ name: 'Player', param: p });
   }
 
   onPageShow(): void {
@@ -371,7 +487,14 @@ struct IndexPage {
   private refreshCounts(): void {
     this.vodCount = SourceManager.shared().getVodSources().length;
     this.liveCount = SourceManager.shared().getLiveSources().length;
-    this.favCount = HistoryStore.shared().getFavorites().length;
+    // 收藏数 = 点播收藏 + 直播收藏（结构化记录，旧版裸 URL 空名不计）
+    let favTotal = HistoryStore.shared().getFavorites().length;
+    for (const v of HistoryStore.shared().getLiveFavorites()) {
+      if (v.name !== '') {
+        favTotal++;
+      }
+    }
+    this.favCount = favTotal;
     this.downloadCount = DownloadManager.shared().getTasks().length;
   }
 
@@ -944,6 +1067,16 @@ struct IndexPage {
     return null;
   }
 
+  /**
+   * 展开卡片底部要额外留出的空白（vp）。
+   * 只对「长频道」源（就是会弹出『收起频道列表』浮层的那一个）生效 ——
+   * 这时 List 的 padding-bottom 被归零让卡片压到底，让位空间就由卡片自己承担，
+   * 否则滚到末尾时最后几行频道会被浮层和导航坞压住点不到。
+   */
+  private liveCardTail(group: LiveGroupState): number {
+    return (group.expanded && group.channels.length > LIVE_COLLAPSE_ROWS) ? LIVE_EXPAND_TAIL : 0;
+  }
+
   /** 收起所有「长频道」分组，并把列表滚回第一个被收起源的分组标题 */
   private collapseLongGroups(): void {
     let target: string = '';
@@ -1102,41 +1235,64 @@ struct IndexPage {
     this.navStack.pushPath({ name: 'About' });
   }
 
+  /** 页面背景渐变。色值走资源，深浅主题自动跟随 */
+  private pageBgGradient(): LinearGradientOptions {
+    const colors: Array<[ResourceColor, number]> = [
+      [$r('app.color.color_bg_top'), 0],
+      [$r('app.color.color_bg'), 0.52],
+      [$r('app.color.color_bg_bottom'), 1]
+    ];
+    const opt: LinearGradientOptions = {
+      direction: GradientDirection.Bottom,
+      colors: colors
+    };
+    return opt;
+  }
+
+  /** 环境光斑：纯色从中心渐隐到全透明 */
+  private blobGradient(color: ResourceColor, radius: number): RadialGradientOptions {
+    const colors: Array<[ResourceColor, number]> = [
+      [color, 0],
+      [color, 0.38],
+      ['#00FFFFFF', 1]
+    ];
+    const opt: RadialGradientOptions = {
+      center: [radius, radius],
+      radius: radius,
+      colors: colors
+    };
+    return opt;
+  }
+
   build() {
     Navigation(this.navStack) {
       Stack({ alignContent: Alignment.TopStart }) {
         // 背景铺满全屏（含状态栏与底部导航条）
+        // 渐变底：沉浸光感的"通透"需要有东西可透 —— 纯色底上的玻璃只是一块灰板。
+        // 从顶部淡蓝、中段回到页面底色、底部转淡青，配合下面两团光斑形成"空间里有一束光"。
         Column()
           .width('100%')
           .height('100%')
-          .backgroundColor($r('app.color.color_bg'))
+          .linearGradient(this.pageBgGradient())
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-        Column({ space: 0 }) {
-        // 顶部搜索栏
-        Row({ space: 8 }) {
-          Search({
-            placeholder: '搜索电影 / 电视剧 / 主播',
-            value: $$this.searchValue
-          })
-            .layoutWeight(1)
-            .height(this.wide() ? 44 : 36)
-            .searchButton('搜索', { fontSize: 14, fontColor: $r('app.color.color_primary') })
-            .onSubmit((value: string) => {
-              this.onSearchSubmit();
-            })
-        }
-        .width('100%')
-        // 页面根节点已被框架放在状态栏下方（实测平板状态栏 45vp），
-        // 所以这里的 top 是「状态栏之外再多留多少」——手机上 10vp 刚好，
-        // 平板再留 10vp 就显空了，压到 4vp。
-        .padding({
-          left: this.wide() ? 16 : 12,
-          right: this.wide() ? 16 : 12,
-          top: this.wide() ? 4 : 10,
-          bottom: this.wide() ? 6 : 4
-        })
+        // 环境光斑：左上偏冷、右中偏暖。用径向渐变本身做柔边，
+        // 不额外加 blur —— 大面积的 blur 会多一层离屏渲染，长列表上很划不来。
+        Column()
+          .width(300)
+          .height(300)
+          .radialGradient(this.blobGradient($r('app.color.color_blob_cool'), 150))
+          .position({ x: -110, y: -150 })
+          .hitTestBehavior(HitTestMode.None)
 
+        Column()
+          .width(260)
+          .height(260)
+          .radialGradient(this.blobGradient($r('app.color.color_blob_warm'), 130))
+          .position({ x: 210, y: 600 })
+          .hitTestBehavior(HitTestMode.None)
+
+        Column({ space: 0 }) {
         // Tabs 保留原生 tabBar。
         // 血的教训 —— 以下任一作法都会让 Tabs 内容区整块塌陷（页面只剩搜索栏 + 纯黑底）：
         //   · .ignoreLayoutSafeArea(...)
@@ -1148,20 +1304,35 @@ struct IndexPage {
           TabContent() {
             this.homeContent()
           }
-          .tabBar(this.homeTabBar())
+          .tabBar(this.blankTabBar())
 
           TabContent() {
             this.liveContent()
           }
-          .tabBar(this.liveTabBar())
+          .tabBar(this.blankTabBar())
 
           TabContent() {
             this.mineContent()
           }
-          .tabBar(this.mineTabBar())
+          .tabBar(this.blankTabBar())
         }
-        .barHeight(58)
-        .barBackgroundColor($r('app.color.color_bg'))
+        .barHeight(IndexPage.NAV_BAND_H)
+        // 带子（原生 tabBar 区域）本身是空的（胶囊是页面浮层，见 bottomNavBar()）。
+        // 目标：让这条带子**完全透明**，背后直接透出根 Stack 那层全屏页面渐变
+        // —— 于是胶囊背后就是 APP 界面底色，没有任何「长方形」。
+        //
+        // 关键坑：barOverlap(true) 会**强制**给 tabBar 套一层
+        // BlurStyle.COMPONENT_THICK 的厚材质（见 SDK 中 barOverlap 的注释），
+        // 这层材质盖在 barBackgroundColor 之上，barBackgroundBlurStyle(NONE)
+        // 也压不住它 —— 用户反复看到的「长方形」就是这层通栏磨砂。
+        // 而内容本来就被 TabContent 视口裁在带子上沿（不会真的透进带子里），
+        // 所以索性关掉 overlap，让带子回归纯透明 → 直接露根渐变：
+        .barBackgroundColor(Color.Transparent)
+        .barBackgroundBlurStyle(BlurStyle.NONE)
+        .barOverlap(false)
+        // Tabs 自己铺进手势条那一条：带子底边要落在屏幕物理底边（2848），
+        // 胶囊的「底部留白 30vp」才有确定的参照物。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
         .animationDuration(0)
         .onChange((index: number) => {
           this.activeTab = index;
@@ -1174,17 +1345,122 @@ struct IndexPage {
         }
         .width('100%')
         .height('100%')
-        .backgroundColor($r('app.color.color_bg'))
-        // 页面根被框架让出了底部安全区（平板实测 26vp），导航条因此浮在屏幕底部之上，
-        // 底下一整条空白 —— 这就是「导航离屏幕底太远」的真正原因。
-        // 把这一层延伸到安全区里，Tabs 才会真正落到物理底边。
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+        // 这里不能再铺不透明底色：会把背后的渐变与光斑整块盖掉。
+        // 也**不要**再 expandSafeArea 到底部：一旦扩进安全区，Tabs 的底边就
+        // 变成屏幕物理底边，导航带子整体下移 28vp，胶囊又会被挤到屏幕外。
+        // 底部安全区那一条由 Stack 最底层那面积渐变负责铺满，与这里无关。
+
+        // 顶部安全区过渡罩（状态栏那一条）。
+        //
+        // 为什么必须靠 expandSafeArea 往上长：窗口没开全屏布局
+        // （EntryAbility 里有说明：开全屏会让 Navigation 与 NavDestination
+        // 的坐标系错位），普通子节点会被裁在安全区之下，只有 expandSafeArea
+        // 能把这一层画进状态栏区域。
+        // 效果：状态栏那一条不再是硬邦邦的纯色，而是「磨砂 + 向上加深」的过渡，
+        // 和页面顶部自然接上（参考图里安全区的处理方式）。
+        // 总高 = band + fade = 88vp，正好等于 topInset()：过渡区在「继续观看」上沿
+        // 归零，一个像素都不压住首屏内容。
+        BlurFade({ edge: 'top', band: SystemInsets.top() + 36, fade: 14, radius: 26 })
+
+        // 顶部玻璃浮层：压在 Tabs 内容之上（不在 Column 流里），
+        // 所以三个 Tab 的滚动内容都会从它「背后」滚过，被 backgroundBlurStyle 磨开。
+        // 这就是「导航栏能隐约看到滚动内容」的顶部版本。
+        // 代价：内容起点被浮层盖住，所以三个 Tab 的内容都要留出 topInset() 的顶部留白。
+        Column() {
+          Row({ space: 8 }) {
+            Search({
+              placeholder: '搜索电影 / 电视剧 / 主播',
+              value: $$this.searchValue
+            })
+              .layoutWeight(1)
+              .height(this.wide() ? 44 : 36)
+              // 沉浸光感：半透明底 + 背景模糊做兜底，支持沉浸材质的设备上再由系统接管
+              // （THIN 是薄材质，按压时会有轻微形变和光随指动的反馈）
+              .backgroundColor($r('app.color.color_glass'))
+              .borderRadius(this.wide() ? 22 : 18)
+              .backgroundEffect({ radius: 18, saturation: 1.6 })
+              // 细描边：深色主题下玻璃只比背景亮一点点，没边仍像「没有容器」；
+              // 浅色主题下白玻璃压在近白渐变上同理。
+              .border({ width: 1, color: $r('app.color.color_nav_border') })
+              .shadow({ radius: 18, color: $r('app.color.color_glass_shadow'), offsetY: 6 })
+              .searchButton('搜索', { fontSize: 14, fontColor: $r('app.color.color_primary') })
+              .onSubmit((value: string) => {
+                this.onSearchSubmit();
+              })
+          }
+          .width('100%')
+          // Row 必须显式给高度：不给的话，外层 Column 被 expandSafeArea 撑到
+          // 整个安全区那么高，Row 作为唯一子节点跟着被撑满，搜索胶囊在 Row 里
+          // 垂直居中 —— 结果胶囊离状态栏空出 20vp，看着像"没贴上去"。
+          .height(this.wide() ? 44 : 40)
+          // top 归零：搜索栏直接贴着安全区底边。
+          .padding({
+            left: this.wide() ? 16 : 12,
+            right: this.wide() ? 16 : 12,
+            // 全屏后浮层从 y=0 起排，搜索栏自己让开状态栏
+            top: SystemInsets.top(),
+            bottom: this.wide() ? 6 : 6
+          })
+          .alignItems(VerticalAlign.Top)
+        }
+        .width('100%')
+        // 这一层刻意「不铺底」。
+        // 它的实测盒子是 [0,133][1276,364]，比搜索胶囊本身（196~322）高出一大截，
+        // 一旦给它半透明底色（早先是 color_glass_bar + 模糊），多出来的那段就会
+        // 盖住下面第一个区块标题 —— 表现为「继续观看 / 查看全部」只剩下半截，
+        // 而且因为是一层浅玻璃，字是被"洗白"而不是被遮住，看着像渲染错了。
+        // 玻璃感交给搜索胶囊自己（它已经有底色 + 模糊 + 描边），
+        // 这也正是要的效果：卡片从胶囊两侧和下方透出来。
+        // 往上延伸进状态栏区域：让状态栏也是玻璃，而不是一块不透明的系统底色。
+        // 内容本身进不了状态栏区域（窗口没开全屏），所以状态栏里透出的是页面渐变；
+        // 「看到滚动内容」这件事由搜索栏这一段玻璃负责 —— 内容从它下面滚过去。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+
+        // 底部安全区过渡罩（手势条那一条）：与顶部同一套做法，
+        // 内容从它背后滚过时被虚化。放在胶囊之前，胶囊才浮在它上面。
+        Stack({ alignContent: Alignment.Bottom }) {
+          // 底部底色是暖色（color_bg_bottom #E6E7E2 / 深色 #2E2723），
+          // 罩子必须跟着换，否则冷色罩压在暖底上就是一条「色差带」。
+          BlurFade({
+            edge: 'bottom',
+            band: SystemInsets.bottom() + 68,
+            fade: 30,
+            radius: 28,
+            soft: $r('app.color.color_veil_b_soft'),
+            deep: $r('app.color.color_veil_b_deep'),
+            clear: $r('app.color.color_veil_b_clear')
+          })
+        }
+        .width('100%')
+        .height('100%')
+        .hitTestBehavior(HitTestMode.Transparent)
+
+        // 底部导航胶囊（浮层）：压在滚动内容之上，靠容器 justifyContent(End) 贴底。
+        // 必须写在 Stack 的**花括号里面**。
+        // 之前写在 Stack 的右括号之后，成了 builder 里的一条游离语句，
+        // 节点被挂到 Navigation 内容上、位置完全不受控 ——
+        // 表现就是胶囊大半截跑到屏幕底边之外（v23），或者干脆不出现（v22/v25）。
+        this.bottomNavBar()
       }
       .width('100%')
       .height('100%')
+
     }
     .width('100%')
     .height('100%')
+    // 根 Stack 必须自己铺进底部安全区。
+    // 不铺的话布局底边停在安全区上沿（实测 y=2750），底下的 28vp 里
+    // 没有任何子节点能落脚 —— 导航坞要么够不到屏幕底边（露出一条纯色），
+    // 要么靠 expandSafeArea 硬顶、结果整块被平移出屏幕（胶囊被裁掉那一版）。
+    // 关键一步：把 Navigation 自己的盒子铺进状态栏与手势条。
+    // 实测窗口的 UI 根节点被框架下移到 y=133，普通子节点全部跟着下移；
+    // 只有 expandSafeArea 能把根节点往上顶到 y=0，内容才真的会从状态栏背后滚过。
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    // 让 Navigation 连安全区一起忽略。
+    // 不加这句时框架会把主内容下移 133px、却把 NavDestination 放在 y=0 ——
+    // 两套坐标系打架，这正是此前「状态栏那一条永远进不去内容」的真正原因。
+    // 忽略之后所有页面统一从 y=0 起排，安全区让位交给页面用 SystemInsets 处理。
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     // 实测：页面根与 Navigation 都是 [0,133][1276,2848]（已全屏），
     // 但内部 NavBarContent 只到 2456，差的 392px 正是「底部悬空」。
     // 那是 Navigation 为自带标题栏/工具栏预留的空间，必须全部关掉。
@@ -1258,51 +1534,187 @@ struct IndexPage {
 
   // ---------- Tab 栏 ----------
 
+  /**
+   * 原生 tabBar 的空壳：只负责给内容区算一条底部带子（barHeight），
+   * 视觉全部交给 bottomNavBar() 那颗浮层胶囊。
+   * barHeight **不能撤**，取 0 会让 Tabs 内容区整块塌陷。
+   */
   @Builder
-  homeTabBar() {
-    this.tabBarItem($r('app.media.ic_home'), '首页', 0)
-  }
-
-  @Builder
-  liveTabBar() {
-    this.tabBarItem($r('app.media.ic_live'), '直播', 1)
-  }
-
-  @Builder
-  mineTabBar() {
-    this.tabBarItem($r('app.media.ic_star'), '我的', 2)
+  blankTabBar() {
+    Column()
+      .width('100%')
+      .height('100%')
   }
 
   /**
-   * 单个 tab 项。
+   * 底部导航胶囊（浮层）。
    *
-   * 高亮判断必须写在函数体里直接读 this.activeTab，不能靠入参传布尔值。
-   * 原因：@Builder 的参数是「按值传递」——即使传进来的是状态变量，
-   * 状态变化也不会触发 @Builder 内部 UI 刷新。之前传的 active: boolean
-   * 被永久固定在首次渲染那一刻（activeTab=0），于是无论切到直播还是我的，
-   * 都只有「首页」保持标红。改成传恒定的 tabIndex，让判断发生在渲染期。
+   * 位置：容器铺满整页、靠 justifyContent(FlexAlign.End) 把胶囊压到容器底边，
+   * 再由 padding.bottom 抬起一点点。根 Stack 的盒子实测是 [0,133][1276,2750]，
+   * 底边 2750 就是手势条安全区上沿 —— 参考图里胶囊底边也在屏高 96.5% 处，
+   * 两者对得上，所以底部留白只需 2vp 的呼吸位。
    *
-   * 另外：Column 自带背景色 + expandSafeArea(BOTTOM)，
-   * 让导航栏底色一直铺到屏幕物理底边（覆盖系统手势条那条黑带），
-   * 图标仍按 barHeight 内部居中，不会被手势条压住。
+   * 为什么不用 .align(Alignment.Bottom)：
+   * 实测那样挂会被推到屏幕底边之外（顶边 y≈2745，整颗看不见）。
+   * 为什么不用 tabBar：每个 TabContent 的 tabBar 是「一个 tab 项」，
+   * Tabs 会把三项横排，屏幕上会出现三颗各占 1/3 宽的胶囊。
    */
   @Builder
-  tabBarItem(icon: Resource, label: string, tabIndex: number) {
-    Column({ space: this.wide() ? 4 : 2 }) {
-      Image(icon)
-        .width(this.tabIconSize())
-        .height(this.tabIconSize())
-        .opacity(this.activeTab === tabIndex ? 1 : 0.45)
-      Text(label)
-        .fontSize(this.wide() ? 13 : 10)
-        .fontColor(this.activeTab === tabIndex ? $r('app.color.color_primary') : $r('app.color.color_text_secondary'))
+  bottomNavBar() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      // 只留一颗胶囊：带子已经靠 Tabs 的 barBackgroundEffect 做成全透明，
+      // 背后直接透出滚动的 TabContent，所以这里**不再需要**实心覆盖层
+      // （之前那块 color_bg_bottom 实心底就是滚动时看到的「长方形」）。
+      //
+      // 位置：带子已收到 NAV_BAND_H(2vp)，内容区一直铺到导航坞底边，
+      // 胶囊靠 padding.bottom = NAV_PILL_GAP 抬离底边（见常量注释）。
+      // 胶囊 = 一层「磨砂」+ 一层「图标文字」，两层叠进同一个圆角框。
+      //
+      // 为什么磨砂要单独做一层子节点，而不是直接挂在圆角 Row 上：
+      // backgroundEffect 画出来的是一块**直角矩形**包围盒，不跟随 borderRadius 裁剪，
+      // 直接标在圆角 Row 上，四角之外就会多出一块方形磨砂（那圈「长方形」的来源之一）。
+      // 拆成子层后，由外层 Stack 的 clip(true) 按胶囊圆角统一裁掉，效果和
+      // 顶部搜索栏（同一个 backgroundEffect 参数）完全一致。
+      // 外层 Column 只负责定位与收边（左右内收 + 底部留白），
+      // 里面那颗 Stack 才是真正的胶囊 —— 圆角、描边、落影都挂在它身上，
+      // 否则 backgroundEffect 的直角包围盒会比胶囊宽出一圈。
+      Column() {
+        Stack({ alignContent: Alignment.Center }) {
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor($r('app.color.color_nav_dock'))
+            // 与顶部搜索栏同档：radius 18 / saturation 1.6
+            .backgroundEffect({ radius: 18, saturation: 1.6 })
+
+          Row() {
+            this.navItem($r('app.media.ic_home'), '首页', 0)
+            this.navItem($r('app.media.ic_nav_live'), '直播', 1)
+            this.navItem($r('app.media.ic_nav_mine'), '我的', 2)
+          }
+          .width('100%')
+          .height('100%')
+          // 内收 12：图里三枚图标中心只占 495px（舱宽 794px），比三等分窄一圈，
+          // 所以整排要从胶囊边缘再退一点，不然最左/最右的图标会顶到圆角上。
+          .padding({ left: 12, right: 12 })
+        }
+        .width('100%')
+        .height(IndexPage.NAV_PILL_H)
+        // 四角全圆：图里两端都是半圆，radius 取高度一半
+        .borderRadius(IndexPage.NAV_PILL_H / 2)
+        // clip 必须开：磨砂层是直角矩形，靠它收成胶囊形；
+        // 顺带把导航项的「光追」光斑也限制在胶囊内部。
+        .clip(true)
+        // 描边只留 0.5vp 的极细边，勾勒出玻璃轮廓而不至于像「包了一圈黑框」。
+        .border({ width: 0.5, color: $r('app.color.color_nav_border') })
+        // 与搜索栏同一档落影：胶囊才像浮在内容之上，而不是贴了一张纸。
+        .shadow({ radius: 18, color: $r('app.color.color_glass_shadow'), offsetY: 6 })
+      }
+      .width('100%')
+      .padding({
+        left: this.navSidePad(),
+        right: this.navSidePad(),
+        // 胶囊底边要落在手势条之上（全屏后容器已经铺到屏幕物理底边）
+        bottom: IndexPage.NAV_PILL_GAP + SystemInsets.bottom()
+      })
     }
     .width('100%')
     .height('100%')
-    .padding({ bottom: 2 })
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor($r('app.color.color_bg'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+    // 容器只是定位壳，别让它挡住滚动：Transparent 下自身不吃手势，
+    // 子节点（三个导航项）的 onClick 仍然正常。
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  /**
+   * 胶囊里的单个导航项。
+   *
+   * 高亮判断必须写在函数体里直接读 this.activeTab，不能靠入参传布尔值：
+   * @Builder 的参数是「按值传递」，状态变化不会触发 builder 内部刷新。
+   * 之前传 active: boolean，值被钉在首帧（activeTab=0），
+   * 于是无论切到直播还是我的，只有「首页」保持标红。
+   */
+  @Builder
+  navItem(icon: Resource, label: string, tabIndex: number) {
+    Stack({ alignContent: Alignment.Center }) {
+      // 「光追」光斑：径向渐变，中心亮、边缘全透明。
+      // 用渐变而不是 shadow —— 阴影是实心色块加模糊，边界发灰；
+      // 渐变能自己安排衰减曲线，扩到最外圈时正好归零，看起来才是「光」。
+      // 颜色取品牌红的 RGB（深浅主题的主色 #E5484D / #F2555A 几乎一致，
+      // 一次写死即可，省掉一套只在 500ms 里出现的高光配色）。
+      Column()
+        .width(54)
+        .height(54)
+        .borderRadius(27)
+        .radialGradient({
+          center: ['50%', '50%'],
+          radius: 27,
+          colors: [['#B3E5484D', 0], ['#40E5484D', 0.55], ['#00E5484D', 1]]
+        })
+        .opacity(this.navGlowTab === tabIndex ? this.navGlowAlpha : 0)
+        .scale({
+          x: this.navGlowTab === tabIndex ? this.navGlowScale : 0.5,
+          y: this.navGlowTab === tabIndex ? this.navGlowScale : 0.5
+        })
+
+      Column({ space: 4 }) {
+        Image(icon)
+          .width(this.tabIconSize())
+          .height(this.tabIconSize())
+          // 三个图标画在同一张 56 单位画布上，尺寸一致才不会一大一小
+          .objectFit(ImageFit.Contain)
+          // 图标不做染色，只改透明度。参考图里未选中项仍接近白（不是深灰），
+          // 0.45 真机上显得发闷，提到 0.6，区分度靠「实心 / 描边」的图形差异。
+          .opacity(this.activeTab === tabIndex ? 1 : 0.6)
+        Text(label)
+          .fontSize(IndexPage.NAV_LABEL_SIZE)
+          .fontWeight(this.activeTab === tabIndex ? FontWeight.Medium : FontWeight.Normal)
+          // 单色而不是品牌红：图里选中项是白色，整条导航看起来才干净
+          .fontColor(this.activeTab === tabIndex
+            ? $r('app.color.color_text') : $r('app.color.color_text_secondary'))
+      }
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .onClick(() => {
+      this.triggerNavGlow(tabIndex);
+      this.selectTab(tabIndex);
+    })
+  }
+
+  /**
+   * 导航按钮的「光追」：一团光从图标中心扩散出去并淡出。
+   *
+   * 必须隔一帧再起动画：同一帧里把「亮起来」和「扩散 + 淡出」两次赋值写在一起，
+   * ArkUI 会把它们合并成一次状态更新，animateTo 只看得到终态 ——
+   * 现场表现就是完全没有动画（光斑根本没出现）。
+   */
+  private triggerNavGlow(index: number): void {
+    this.navGlowTab = index;
+    this.navGlowAlpha = 0.85;
+    this.navGlowScale = 0.45;
+    setTimeout(() => {
+      this.getUIContext().animateTo({ duration: 520, curve: Curve.EaseOut }, () => {
+        this.navGlowAlpha = 0;
+        this.navGlowScale = 1.3;
+      });
+    }, 16);
+  }
+
+  /**
+   * 切换 tab。
+   *
+   * 胶囊已经不吃 Tabs 的 onChange 了（它不在 tabBar 里），
+   * 所以直播页的频道数预取要在这里补一次；onChange 若再触发一次也无妨，
+   * 那个方法是幂等的（已加载的源会直接跳过）。
+   */
+  private selectTab(index: number): void {
+    if (this.activeTab === index) {
+      return;
+    }
+    this.activeTab = index;
+    if (index === 1) {
+      this.prefetchLiveCounts(false);
+    }
   }
 
   // ---------- 首页 ----------
@@ -1324,12 +1736,86 @@ struct IndexPage {
   }
 
   /**
-   * 底部导航图标尺寸。平板上一律 24vp 会显得又小又空，
-   * 放大到 32vp（配合文字 13fp，总高约 53vp）仍然塞得进 58vp 的 barHeight。
+   * 顶部玻璃浮层占掉的高度（vp）。
+   * 浮层是压在内容之上的，所以三个 Tab 的内容都要先空出这么多，
+   * 否则首屏会被搜索栏盖住。搜索栏本身要能点，所以浮层不吃触摸的地方不能挡。
+   */
+  private topInset(): number {
+    const searchH: number = this.wide() ? 44 : 36;
+    const padTop: number = this.wide() ? 4 : 10;
+    const padBottom: number = this.wide() ? 6 : 4;
+    // 状态栏那一条也要算：内容从 y=0 起排，框架不再替页面让位
+    return SystemInsets.top() + searchH + padTop + padBottom;
+  }
+
+  /**
+   * 底部导航图标尺寸。平板上一律 25vp 会显得又小又空，放大到 28vp
+   * 仍然塞得进 70vp 的胶囊高度（NAV_PILL_H）。
    * 注意 barHeight 必须保持纯常量 —— 它一旦依赖状态，Tabs 内容区会整块塌陷。
    */
   private tabIconSize(): number {
-    return this.wide() ? 32 : 24;
+    // 56 单位的画布渲染成 22vp：房子在画布里占 48 单位 → 墨迹约 18.9vp。
+    // 参考图图标墨迹 46px / 屏高 1920，折到本机 813.7vp 约 19.5vp，与之吻合。
+    return this.wide() ? 25 : 22;
+  }
+
+  /**
+   * 「收起频道列表」浮层距**内容区底边**的距离（vp）。
+   *
+   * 底部磨砂带是按屏幕物理底边算的：SystemInsets.bottom()(28) + 磨砂 68 + 羽化 30
+   * = 126vp；而 Tabs 内容区的底边停在手势条上沿（屏幕底 - 28vp），
+   * 所以过渡带顶端距内容区底边只剩 126 - 28 = 98vp。
+   * 浮层高约 38vp，取 106 → 上下沿分别落在 106 / 144vp，整块都在过渡带之上，
+   * 既不会被罩子洗白，也不会压到胶囊。
+   */
+  private static readonly LIVE_COLLAPSE_LIFT: number = 106;
+
+  /**
+   * 导航胶囊高度（vp）。
+   * 参考图实测 155 / 1920 = 屏高 8.07%，本机可用高 813.7vp → 65.7。
+   * 一开始取 66，但胶囊比带子（NAV_BAND_H=64）还高，会上下各探出一点；
+   * 现收紧到 56，正好能**居中**放进 64vp 的带子里（见 NAV_PILL_GAP）。
+   */
+  private static readonly NAV_PILL_H: number = 56;
+
+  /** 胶囊上方留 6vp 呼吸位（浮层靠 justifyContent 贴底，这个值只用于文档对齐） */
+  private static readonly NAV_PILL_TOP: number = 6;
+
+  /**
+   * 胶囊底边距容器底（= 带子底边）的呼吸位（vp）。
+   * 用来把胶囊**居中**放进带子：带子高 NAV_BAND_H(64vp)，中心距底 32vp，
+   * 故 bottom = 32 - NAV_PILL_H/2 = 32 - 28 = 4。
+   */
+  private static readonly NAV_PILL_GAP: number = 4;
+
+  /** 导航项文字字号（vp）：参考图 26px / 屏高 1920 → 约 12vp */
+  private static readonly NAV_LABEL_SIZE: number = 12;
+
+  /**
+   * tabBar 带子的高度（vp）。带子本身是空的（胶囊是浮层），
+   * 唯一作用是给 Tabs 内容区「扣掉」这么多高度。
+   *
+   * 关键：barOverlap(false) 下内容区高度 = 屏高 - 安全区 - barHeight。
+   * 之前取 64 时内容只画到 y≈2526（导航坞上方就断了），导致
+   * 直播页展开的频道卡片 / 首页列表都在导航坞上方留出一大片空白 ——
+   * 用户反馈的「频道展开界面没有最大化」就是这个。
+   * 现在压到 2vp：内容一直铺到导航坞底边（y≈2743），
+   * 展开的频道卡自然延伸到「收起频道列表」按钮下方。
+   * 不能取 0（会让 Tabs 内容区整块塌陷），2 足够且安全。
+   */
+  private static readonly NAV_BAND_H: number = 2;
+
+  /**
+   * 三个 Tab 的滚动内容底部要额外留出的高度（vp）。
+   * 胶囊是浮在内容之上的（内容从它背后穿过），不留这一截的话
+   * 列表滚到底时最后一行永远被胶囊压住、看不全。
+   * = 胶囊 56 + 底距 ~30 + 余量
+   */
+  private static readonly NAV_CONTENT_PAD: number = 110;
+
+  /** 胶囊左右留白：手机 14vp（参考图 33/860 = 3.84%），平板 22vp */
+  private navSidePad(): number {
+    return this.wide() ? 22 : 14;
   }
 
   /** 推荐网格列数：按可用宽度推算，手机 3 列、平板最多 8 列 */
@@ -1374,7 +1860,8 @@ struct IndexPage {
   }
 
   private chipGap(): number {
-    return this.wide() ? 10 : 8;
+    // 标签按钮之间收紧一档：10/8 时整排看着松散，和下面筛选条的视觉联系也弱
+    return this.wide() ? 7 : 6;
   }
 
   /** 横向标签行的固定高度：文字 13fp + 上下 padding 12vp ≈ 30vp，留余量 */
@@ -1407,7 +1894,9 @@ struct IndexPage {
     // 不用 layoutWeight 之外的技巧包 Scroll：Tabs 内容区一旦塌陷整页就只剩搜索栏。
     Stack({ alignContent: Alignment.BottomEnd }) {
       Scroll(this.homeScroller) {
-      Column({ space: 12 }) {
+      // space 从 12 收到 8：推荐标题、分类标签排、快速筛选条原本各隔 12vp，
+      // 三段读起来像三个互不相干的区块；收紧后它们更像一组「找片工具」。
+      Column({ space: 8 }) {
         // 继续观看（外层 Column 恒定存在，只为量这块高度：
         // 播放后会凭空多出这一块，把下面的推荐整体顶下去 —— 用高度增量补偿滚动偏移）
         Column() {
@@ -1429,6 +1918,9 @@ struct IndexPage {
                   cardSource: '',
                   cardProgress: this.progressWidth(rec),
                   cardCompact: true,
+                  // 这一排卡片数量少（最多几条），采样开销可以接受；
+                  // 不开的话它们永远拿不到主色，片名条只能退回死板的深色
+                  cardGlow: true,
                   onCardClick: () => {
                     this.continuePlay(rec);
                   }
@@ -1456,11 +1948,24 @@ struct IndexPage {
           const h: number = newArea.height as number;
           const delta: number = h - this.historyBlockH;
           this.historyBlockH = h;
+          // 首次量到高度（0 -> 实际值）只是「这一块第一次布局」，不是运行中的增减。
+          // 早期这里照样做补偿，结果是一进首页就被 scrollTo 往下推一截：
+          // 「继续观看 / 查看全部」那一行正好被视口上沿切掉一半 ——
+          // 表现为启动后标题缺了上半截，而手动滑一下又恢复正常。必须跳过首帧。
+          if (!this.historyBlockMeasured) {
+            this.historyBlockMeasured = h > 0;
+            return;
+          }
           // 高度变化（继续观看出现/消失）时把滚动偏移加回同样的量，
           // 视口内容就不会被顶动 —— 否则表现为「播放后返回首页位置变了」。
           if (Math.abs(delta) > 1 && Math.abs(delta) < 400) {
             try {
               const off: number = this.homeScroller.currentOffset().yOffset;
+              // 停在顶部时不需要补偿：off≈0 说明用户还没往下看，
+              // 任何"补偿"都只会把首屏往下推（表现为一进首页标题就被切掉半截）。
+              if (off <= 1) {
+                return;
+              }
               const target: number = off + delta;
               this.homeScroller.scrollTo({ xOffset: 0, yOffset: target > 0 ? target : 0, animation: false });
             } catch (e) {
@@ -1498,6 +2003,10 @@ struct IndexPage {
         // （上一版在平板上「推荐」标题和这排标签会整行不显示）。
         // 显式给高度，任何屏宽下都稳定占位。
         .height(this.chipRowH())
+        // 负 margin：行高是给布局兜底的（内容只有 40vp，行高 44vp），
+        // 多出来的部分会把标题和标签、标签和筛选条之间的空隙撑大。
+        // 真正控制观感间距的是这里，不是外层 Column 的 space。
+        .margin({ top: -6 })
         }
 
         // 筛选 / 排序：在分类之下再做一层「排序 · 类型 · 地区」细分
@@ -1529,6 +2038,7 @@ struct IndexPage {
         .width('100%')
         .height(this.chipRowH())
         .alignItems(VerticalAlign.Center)
+        .margin({ top: -6 })
         }
 
         if (this.filterPanel !== '') {
@@ -1557,6 +2067,9 @@ struct IndexPage {
                   cardRating: item.rating !== undefined && item.rating !== '' && item.rating !== '0'
                     ? '评分： ' + item.rating : '',
                   cardSource: '',
+                  // 方案 B「光从内容来」：采样海报主色，卡片向页面洒出同色光晕。
+                  // 只在推荐区开 —— 采样要额外解码一次，长列表里没必要每张都做。
+                  cardGlow: true,
                   onCardClick: () => {
                     this.openRecommend(item);
                   }
@@ -1577,7 +2090,9 @@ struct IndexPage {
         }
       }
       .width('100%')
-      .padding({ bottom: 20 })
+      // bottom 里那 96vp 是给导航坞让位：坞是浮在内容上的，
+      // 不留这一截的话滚到底时最后一行永远被它压住。
+      .padding({ top: this.topInset(), bottom: 20 + IndexPage.NAV_CONTENT_PAD })
       // 实测首页可用宽度：旋转、分屏、折叠展开都会改变它，所以不能只在启动时取一次。
       // 阈值 1vp 防止亚像素抖动引发无谓重排。
       .onAreaChange((oldArea: Area, newArea: Area) => {
@@ -1813,7 +2328,7 @@ struct IndexPage {
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 10, bottom: 4 })
-      .backgroundColor($r('app.color.color_card'))
+      .backgroundColor($r('app.color.color_glass'))
       .borderRadius(10)
     }
     .width('100%')
@@ -1861,7 +2376,7 @@ struct IndexPage {
             })
         }
         .width('100%')
-        .padding({ left: 16, right: 16, top: 10, bottom: 8 })
+        .padding({ left: 16, right: 16, top: this.topInset(), bottom: 8 })
 
         if (this.liveGroups.length === 0) {
           EmptyView({ emptyText: '暂无直播源，请前往「我的 → 视频源管理」添加' })
@@ -1979,16 +2494,34 @@ struct IndexPage {
                   }
                 }
                 .width('100%')
-                .padding(12)
-                .backgroundColor($r('app.color.color_card'))
+                // 展开时把让位空间画进卡片自身（见 liveCardTail / LIVE_EXPAND_TAIL）：
+                // List 的 padding 区永远露页面底色，卡片压不进去，
+                // 所以那条空白带只能靠卡片自己的下内边距「填」出来。
+                .padding({
+                  left: 12,
+                  right: 12,
+                  top: 12,
+                  bottom: 12 + this.liveCardTail(group)
+                })
+                .backgroundColor($r('app.color.color_glass'))
                 .borderRadius(10)
               }
             }, (group: LiveGroupState) => this.liveGroupKey(group))
           }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        // 底部有「收起」浮层时多留 72vp，否则最后一条频道会被浮层压住点不到
-        .padding({ left: 16, right: 16, bottom: this.longExpandedGroup() !== null ? 72 : 16 })
+        // 展开「长频道」源时底部留白收到 LIVE_EXPAND_BOTTOM（76vp）：
+        // List 只把列表项画到内容盒（padding box）边缘，padding-bottom 那段永远是
+        // 页面底色 —— 之前留 182vp，卡片底下就空出一条空白带（「没有最大化」）；
+        // 归零又会让卡片一路压到胶囊背后（下沿太靠下）。76 正好让卡片下沿
+        // 停在胶囊上方，同时仍在「收起频道列表」浮层之下；
+        // 浮层那一段让位空间由卡片下内边距承担（LIVE_EXPAND_TAIL）。
+        .padding({
+          left: 16,
+          right: 16,
+          // 收起态仍要给导航坞让位
+          bottom: this.longExpandedGroup() !== null ? LIVE_EXPAND_BOTTOM : 16 + IndexPage.NAV_CONTENT_PAD
+        })
       }
       }
       .width('100%')
@@ -2009,7 +2542,10 @@ struct IndexPage {
         .padding({ left: 18, right: 18, top: 10, bottom: 10 })
         .backgroundColor('#E61A1A1E')
         .borderRadius(22)
-        .margin({ bottom: 22 })
+        // 必须整体落在底部磨砂过渡带**之上**（见 LIVE_COLLAPSE_LIFT）。
+        // 之前贴 88vp，浮层下沿正好压在羽化段里 —— 那一段罩子已有 30% 上下的
+        // 不透明度，表现为按钮下半截被"洗"进背景，看着像被过渡区遮住了。
+        .margin({ bottom: IndexPage.LIVE_COLLAPSE_LIFT })
         .onClick(() => {
           this.collapseLongGroups();
         })
@@ -2039,7 +2575,14 @@ struct IndexPage {
             .textAlign(TextAlign.Start)
         }
         .width('100%')
-        .padding({ left: 16, right: 16, top: 12, bottom: 8 })
+        .padding({
+          left: 16,
+          right: 16,
+          top: this.topInset() + 12,
+          // 品牌区是页面顶部元素，这里绝不能用 NAV_CONTENT_PAD（那是给滚到底
+          // 避让胶囊用的），否则「品牌区 ↔ 设置菜单」之间会凭空空出 100+ vp。
+          bottom: 12
+        })
 
         Column({ space: 0 }) {
           SettingsRow({
@@ -2095,7 +2638,8 @@ struct IndexPage {
           .fontColor($r('app.color.color_text_secondary'))
           .width('100%')
           .textAlign(TextAlign.Center)
-          .padding({ top: 16, bottom: 24 })
+          // 底部留白放在滚动内容的末尾，让最后一行能滚过胶囊、不被压住
+          .padding({ top: 16, bottom: 24 + IndexPage.NAV_CONTENT_PAD })
       }
       .width('100%')
       // 同详情页：内容不满一屏时 Scroll 会把子内容垂直居中，顶部凭空多出大片空白。

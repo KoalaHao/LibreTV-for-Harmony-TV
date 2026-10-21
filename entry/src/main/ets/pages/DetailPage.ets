@@ -12,9 +12,19 @@ import { DownloadManager } from '../data/DownloadManager';
 import { VideoDetail, Episode, SpeedTestItem, PlayRecord, PlayLine } from '../model/Types';
 import { Utils } from '../common/Utils';
 import { LoadingView, TagText } from '../components/CommonWidgets';
+import { pageBgGradient } from '../common/GlassTheme';
 import { NetImage } from '../components/NetImage';
 import { PlayerPageParam } from './PlayerPage';
 import { latestNavParam } from '../common/NavParam';
+import { SystemInsets } from '../common/SystemInsets';
+import { BlurFade } from '../common/BlurFade';
+import { ShareService } from '../common/ShareService';
+import { ShareTarget } from '../common/ShareLink';
+import { common } from '@kit.AbilityKit';
+
+/** 封面尺寸（vp）：进度条要严格按这个宽度画，所以提成常量共用 */
+const COVER_W: number = 112;
+const COVER_H: number = 158;
 
 export interface DetailPageParam {
   sourceKey: string;
@@ -96,6 +106,11 @@ export struct DetailPage {
     DetailCache.put(this.sourceKey, this.vodId, detail);
     this.infoTitle = detail.info.title;
     this.infoCover = detail.info.cover !== undefined ? detail.info.cover : '';
+    // 先把分享用的缩略图（<32KB 的 JPEG）在后台压好，
+    // 点分享时直接命中缓存 —— 否则分享面板要等下载+解码，会出现「点了没反应」
+    if (this.infoCover !== '') {
+      ShareService.prefetch(this.infoCover);
+    }
     // 顺手给历史记录补封面：用户从「继续观看」进来或直接搜进来都能覆盖到
     if (this.infoCover !== '') {
       HistoryStore.shared().setPicIfEmpty(this.sourceKey, this.vodId, this.infoCover);
@@ -258,6 +273,37 @@ export struct DetailPage {
     }
   }
 
+  /**
+   * 系统分享：把当前这部（当前这一集）分享出去。
+   * 链接里带 sourceKey + vodId + 集下标 + 片名 + 封面，
+   * 对方点开就直接全屏播放，不用再进详情页。
+   */
+  private shareMovie(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    if (ctx === undefined) {
+      this.toast('无法调起系统分享');
+      return;
+    }
+    const epName: string = this.episodes.length > this.currentEp
+      ? this.episodes[this.currentEp].name : '';
+    const t: ShareTarget = {
+      sourceKey: this.sourceKey,
+      vodId: this.vodId,
+      episode: this.currentEp,
+      episodeName: epName,
+      title: this.infoTitle,
+      pic: this.infoCover
+    };
+    const desc: string = epName !== ''
+      ? ('正在看 ' + epName + ' · 来自 LibreTV')
+      : '来自 LibreTV';
+    ShareService.shareMovie(ctx, t, desc).then((ok: boolean) => {
+      if (!ok) {
+        this.toast('当前系统不支持系统分享');
+      }
+    });
+  }
+
   private progressPercent(): string {
     const rec = this.progress;
     if (rec === null || rec.durationMs <= 0 || rec.episode !== this.currentEp) {
@@ -322,35 +368,8 @@ export struct DetailPage {
 
   build() {
     NavDestination() {
-      Column({ space: 0 }) {
-        // 自绘标题栏：不能在 NavDestination 上用 .title()。窗口开启全屏布局后，
-        // 框架把状态栏高度从标题栏高度里扣掉，实测 TitleBar 只剩 63px（196-133），
-        // 文字与返回键被压扁并与状态栏重叠。故统一隐藏内置栏、自己画一条。
-        Row({ space: 8 }) {
-          Row() {
-            Image($r('app.media.ic_back'))
-              .width(20)
-              .height(20)
-          }
-          .width(36)
-          .height(40)
-          .justifyContent(FlexAlign.Center)
-          .onClick(() => {
-            this.navPathStack.pop();
-          })
-          Text(this.navTitle())
-            .fontSize(17)
-            .fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.color_text'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-            .textAlign(TextAlign.Start)
-        }
-        .width('100%')
-        .height(48)
-        .padding({ left: 8, right: 16 })
-
+      Stack({ alignContent: Alignment.Top }) {
+        // 内容层铺满整屏，滚动内容会从下方玻璃导航条背后穿过
       Stack({ alignContent: Alignment.Bottom }) {
         if (this.loading) {
           LoadingView()
@@ -436,13 +455,58 @@ export struct DetailPage {
           }
           .width('100%')
           .padding(16)
-          .backgroundColor($r('app.color.color_card'))
+          .backgroundColor($r('app.color.color_panel_glass'))
+          .backgroundEffect({ radius: 26, saturation: 1.5 })
+          .border({ width: 1, color: $r('app.color.color_nav_border') })
           .borderRadius({ topLeft: 16, topRight: 16 })
         }
       }
         .width('100%')
-        .layoutWeight(1)
-        .backgroundColor($r('app.color.color_bg'))
+        .height('100%')
+        .linearGradient(pageBgGradient())
+        // 底色必须铺进状态栏/手势条：二级页面的内容让出了安全区，
+        // 这一层不扩的话，状态栏里透出的是窗口默认底色，
+        // 和页面渐变叠成两层，状态栏文字直接看不清。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+
+        // 顶部磨砂渐隐：内容从状态栏下面滚过时被这一段虚化，
+
+        // 并且往下越来越清，看不到过渡区的边缘。
+
+        BlurFade({ edge: 'top', band: SystemInsets.top() + 58, fade: 34, radius: 26 })
+
+
+        // 玻璃导航条（方案 A）：浮在内容之上，可隐约看到背后滚动内容
+        // 自绘标题栏：不能在 NavDestination 上用 .title()。窗口开启全屏布局后，
+        // 框架把状态栏高度从标题栏高度里扣掉，实测 TitleBar 只剩 63px（196-133），
+        // 文字与返回键被压扁并与状态栏重叠。故统一隐藏内置栏、自己画一条。
+        Row({ space: 8 }) {
+          Row() {
+            Image($r('app.media.ic_back'))
+              .width(20)
+              .height(20)
+          }
+          .width(36)
+          .height(40)
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.navPathStack.pop();
+          })
+          Text(this.navTitle())
+            .fontSize(17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.color_text'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .textAlign(TextAlign.Start)
+        }
+        .width('100%')
+        .height(48 + SystemInsets.top())
+        .padding({ left: 8, right: 16, top: SystemInsets.top() })
+        .backgroundColor($r('app.color.color_nav_glass'))
+        .backgroundEffect({ radius: 18, saturation: 1.6 })
+        .border({ width: { bottom: 1 }, color: $r('app.color.color_nav_border') })
       }
       .width('100%')
       .height('100%')
@@ -473,25 +537,47 @@ export struct DetailPage {
   detailBody() {
     Scroll() {
       Column({ space: 12 }) {
+        // 顶部占位：随内容滚走，让详情内容能从玻璃导航条背后滑过
+        Column()
+          .width('100%')
+          .height(56 + SystemInsets.top())
+
         // 头部：海报 + 信息
         Row({ space: 12 }) {
           if (this.infoCover !== '') {
             Stack({ alignContent: Alignment.BottomStart }) {
               NetImage({ url: this.infoCover })
-                .width(112)
-                .height(158)
+                .width(COVER_W)
+                .height(COVER_H)
                 .borderRadius(10)
               if (this.progressPercent() !== '') {
-                Column()
-                  .width(this.progressPercent())
-                  .height(3)
-                  .backgroundColor($r('app.color.color_primary'))
+                // 进度条分两层：先铺满封面宽度的轨道，再按百分比盖一段进度。
+                // 老写法是单个 Column 直接 .width('42%')，而它的父容器是「按内容撑开」的
+                // Stack —— 百分比拿不到确定的参照宽度，实测长度和封面完全对不上
+                // （进度一长就捅出封面右边界）。这里给 Stack 也给死宽度，比例才有意义。
+                Stack({ alignContent: Alignment.Start }) {
+                  Row()
+                    .width('100%')
+                    .height(3)
+                    .backgroundColor('#4DFFFFFF')
+                  Row()
+                    .width(this.progressPercent())
+                    .height(3)
+                    .backgroundColor($r('app.color.color_primary'))
+                }
+                .width(COVER_W)
+                .height(3)
               }
             }
+            .width(COVER_W)
+            .height(COVER_H)
+            .borderRadius(10)
+            // 裁掉溢出：进度条贴着封面下沿时，两个下圆角也要跟着圆
+            .clip(true)
           } else {
             Column()
-              .width(112)
-              .height(158)
+              .width(COVER_W)
+              .height(COVER_H)
               .backgroundColor($r('app.color.color_chip_bg'))
               .borderRadius(10)
           }
@@ -590,7 +676,7 @@ export struct DetailPage {
           }
           .width(42)
           .height(42)
-          .backgroundColor($r('app.color.color_card'))
+          .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
           .onClick(() => {
             this.toggleFav();
@@ -603,7 +689,7 @@ export struct DetailPage {
           }
           .width(42)
           .height(42)
-          .backgroundColor($r('app.color.color_card'))
+          .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
           .onClick(() => {
             this.runSpeedTest();
@@ -619,10 +705,25 @@ export struct DetailPage {
           }
           .width(42)
           .height(42)
-          .backgroundColor($r('app.color.color_card'))
+          .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
           .onClick(() => {
             this.downloadCurrent();
+          })
+
+          // 分享：拉起系统分享面板（带封面缩略图的 libretv:// 链接）。
+          // 面板里同时有「碰一碰」入口，对方的设备贴一下就过去了。
+          Button() {
+            Image($r('app.media.ic_share'))
+              .width(20)
+              .height(20)
+          }
+          .width(42)
+          .height(42)
+          .backgroundColor($r('app.color.color_glass'))
+          .borderRadius(21)
+          .onClick(() => {
+            this.shareMovie();
           })
         }
         .width('100%')
@@ -726,7 +827,6 @@ export struct DetailPage {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .padding({ top: 8 })
       // 关键：内容不满一屏时 Scroll 会把子内容垂直居中（实测 Column 落在 y=834，
       // 而 Scroll 视口顶部是 y=196，正好等于 (2652-1376)/2），表现为「顶部大片空白」。
       // minHeight 撑满视口即可强制顶对齐；内容超长时照常滚动。

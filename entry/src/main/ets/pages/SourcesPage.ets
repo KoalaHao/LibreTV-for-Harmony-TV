@@ -12,7 +12,11 @@ import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
 import { EmptyView, TagText } from '../components/CommonWidgets';
+import { LiquidDialog } from '../common/LiquidDialog';
+import { pageBgGradient } from '../common/GlassTheme';
 import { Brand } from '../common/Brand';
+import { SystemInsets } from '../common/SystemInsets';
+import { BlurFade } from '../common/BlurFade';
 
 @Component
 export struct SourcesPage {
@@ -36,6 +40,12 @@ export struct SourcesPage {
   @State clipUrl: string = '';
   @State exportJson: string = '';
   @State showExport: boolean = false;
+  /** 「一键导入推荐源」正在执行：按钮要立刻变成转圈 + 文案，否则点击后几百毫秒没反应 */
+  @State importingRec: boolean = false;
+  /** 导入开始时间戳：用于保证 busy 态的最短展示时长 */
+  private importStartedAt: number = 0;
+  /** busy 态最短展示时长（ms）：批量写之后真实耗时只有几十毫秒，太短会闪 */
+  private static readonly IMPORT_MIN_BUSY: number = 520;
 
   aboutToAppear(): void {
     this.refresh();
@@ -75,27 +85,81 @@ export struct SourcesPage {
   }
 
   /**
-   * 一键导入推荐源。
-   * addVodSource 内部会按归一化后的 URL 去重，也会卡 MAX_VOD 上限，
-   * 所以这里不用自己判重，只统计「新增了几个」告诉用户。
+   * 一键导入推荐源：**先出反馈，再干活**。
+   *
+   * 早先这里是一个纯同步函数：进来就 for 循环 addVodSource 8 次，每次都要
+   * save() 一次，而 save 里两次 preferences.flush() 是同步落盘 —— 8 个源就是
+   * 16 次 flush，主线程被按住几百毫秒。这期间一帧都画不出来，
+   * 用户看到的就是「点了按钮没反应，过一会儿才蹦个 toast」。
+   *
+   * 现在两件事一起改：
+   *   ① 立刻把 importingRec 置 true，让这一帧先画出去（转圈 + 「正在导入…」）；
+   *   ② 真正落盘时用 addVodSources 批量写，8 个源只 load 一次、save 一次。
    */
   private importRecommended(): void {
-    const mgr: SourceManager = SourceManager.shared();
-    let added: number = 0;
-    for (const r of RECOMMENDED_VOD) {
-      if (mgr.addVodSource(r.name, r.api, '') !== null) {
-        added++;
-      }
-    }
-    this.refresh();
-    if (added === 0) {
-      this.toast('推荐源都已在列表里了');
+    if (this.importingRec) {
       return;
     }
-    const skipped: number = RECOMMENDED_VOD.length - added;
-    this.toast(skipped > 0
-      ? '已添加 ' + added + ' 个推荐源（' + skipped + ' 个已存在），建议先测速'
-      : '已添加 ' + added + ' 个推荐源，建议先测速');
+    this.importingRec = true;
+    this.importStartedAt = Date.now();
+    // 隔一帧再干活：状态写入是异步的，同步紧接着做重活会把这次重绘一起吞掉
+    setTimeout(() => {
+      this.runImportRecommended();
+    }, 60);
+  }
+
+  /**
+   * 收尾：保证「正在导入…」至少露面 IMPORT_MIN_BUSY ms 再出结果提示。
+   * 批量写之后真实的落盘只有几十毫秒，转圈会一闪而过 —— 反倒像是闪了一下故障。
+   * 给个最短展示时长，两条提示一前一后、读得清。
+   */
+  private finishImport(msg: string): void {
+    const elapsed: number = Date.now() - this.importStartedAt;
+    const wait: number = elapsed < SourcesPage.IMPORT_MIN_BUSY
+      ? SourcesPage.IMPORT_MIN_BUSY - elapsed
+      : 0;
+    setTimeout(() => {
+      this.importingRec = false;
+      this.toast(msg);
+    }, wait);
+  }
+
+  private runImportRecommended(): void {
+    let msg: string = '';
+    try {
+      // 先按 addVodSource 的规则归一化（剥掉 ?ac=list / /api.php/provide/vod 之类），
+      // 否则批量写进去的是未归一化的地址，和后面手动添加的同名源会对不上、去重失效。
+      const seeds: VodSource[] = [];
+      for (const r of RECOMMENDED_VOD) {
+        const url: string = SourceManager.normalizeApiUrl(r.api);
+        if (url === '') {
+          continue;
+        }
+        seeds.push({
+          key: '',
+          name: r.name,
+          url: url,
+          enabled: true,
+          isAdult: r.isAdult === true,
+          failStreak: 0,
+          disabledUntil: 0
+        });
+      }
+      // addVodSources 内部会重算 key、按 URL 去重、卡 MAX_VOD 上限，且只落盘一次
+      const added: number = SourceManager.shared().addVodSources(seeds);
+      this.refresh();
+      if (added === 0) {
+        msg = '推荐源都已在列表里了';
+      } else {
+        const skipped: number = seeds.length - added;
+        msg = skipped > 0
+          ? '已添加 ' + added + ' 个推荐源（' + skipped + ' 个已存在），建议先测速'
+          : '已添加 ' + added + ' 个推荐源，建议先测速';
+      }
+    } catch (e) {
+      msg = '导入失败，请重试';
+    }
+    this.finishImport(msg);
   }
 
   private addVod(): void {
@@ -135,32 +199,52 @@ export struct SourcesPage {
     this.toast('已添加「' + added.name + '」');
   }
 
+  /**
+   * 弹窗 controller 必须是成员变量。
+   * 早先这里写的是 `const ctl = new CustomDialogController(...)`，函数返回后
+   * 引用就没了：弹窗照常弹出，但按钮里的 `this.controller?.close()` 关不掉它，
+   * 于是「点删除，源删了，窗口还在」；取消同理点了没反应。
+   */
+  private dlgCtl: CustomDialogController | undefined = undefined;
+
   private confirmDeleteVod(source: VodSource): void {
-    this.getUIContext().showAlertDialog({
-      message: '确定删除点播源「' + source.name + '」吗？',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: {
-        value: '删除',
-        action: () => {
+    // 方案 D：自绘液态玻璃弹窗
+    this.dlgCtl = new CustomDialogController({
+      // 遮罩：不加的话弹窗和背后的列表糊成一片，看不出「这是个模态」
+      maskColor: '#66000000',
+      customStyle: true,
+      builder: LiquidDialog({
+        message: '确定删除点播源「' + source.name + '」吗？',
+        confirmText: '删除',
+        danger: true,
+        onConfirm: () => {
+          this.dlgCtl?.close();
           SourceManager.shared().removeVodSource(source.key);
           this.refresh();
         }
-      }
+      })
     });
+    this.dlgCtl.open();
   }
 
   private confirmDeleteLive(source: LiveSource): void {
-    this.getUIContext().showAlertDialog({
-      message: '确定删除直播源「' + source.name + '」吗？',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: {
-        value: '删除',
-        action: () => {
+    // 方案 D：自绘液态玻璃弹窗
+    this.dlgCtl = new CustomDialogController({
+      // 遮罩：不加的话弹窗和背后的列表糊成一片，看不出「这是个模态」
+      maskColor: '#66000000',
+      customStyle: true,
+      builder: LiquidDialog({
+        message: '确定删除直播源「' + source.name + '」吗？',
+        confirmText: '删除',
+        danger: true,
+        onConfirm: () => {
+          this.dlgCtl?.close();
           SourceManager.shared().removeLiveSource(source.key);
           this.refresh();
         }
-      }
+      })
     });
+    this.dlgCtl.open();
   }
 
   private toggleVod(source: VodSource): void {
@@ -452,45 +536,12 @@ export struct SourcesPage {
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Bottom }) {
-        // 主内容
-        Column({ space: 0 }) {
-          // 顶部操作栏
-          Row({ space: 8 }) {
-            Row() {
-              Image($r('app.media.ic_back'))
-                .width(20)
-                .height(20)
-            }
-            .width(32)
-            .height(40)
-            .justifyContent(FlexAlign.Center)
-            .onClick(() => {
-              this.navPathStack.pop();
-            })
-            Text('视频源')
-              .fontSize(17)
-              .fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.color_text'))
-              .layoutWeight(1)
-            Text('导入')
-              .fontSize(14)
-              .fontColor($r('app.color.color_primary'))
-              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-              .onClick(() => {
-                this.showImport = !this.showImport;
-              })
-            Text('导出')
-              .fontSize(14)
-              .fontColor($r('app.color.color_primary'))
-              .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-              .onClick(() => {
-                this.exportSources();
-              })
-          }
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 12, bottom: 6 })
-
-          Tabs({ index: this.activeTab }) {
+        // 主内容 + 导航条包一层 Top 对齐的 Stack：
+        // 外层是 Bottom 对齐（给底部浮层面板用），不能让导航条也跟着贴底
+        Stack({ alignContent: Alignment.Top }) {
+        // 内容层铺满整屏：列表从顶部玻璃导航条背后滑过（能隐约透出）
+        Column() {
+          Tabs({ barPosition: BarPosition.End, index: this.activeTab }) {
             TabContent() {
               this.vodPanel()
             }
@@ -502,25 +553,76 @@ export struct SourcesPage {
             .tabBar('直播源 (' + this.liveSources.length + ')')
           }
           .barHeight(44)
+          // 标签栏也走玻璃：底色透明 + 背景模糊，页面渐变会透上来
+          .barBackgroundColor(Color.Transparent)
+          .barBackgroundEffect({ radius: 24, saturation: 1.5 })
           .layoutWeight(1)
         }
         .width('100%')
         .height('100%')
-        .backgroundColor($r('app.color.color_bg'))
+        .linearGradient(pageBgGradient())
+        // 底色必须铺进状态栏/手势条：二级页面的内容让出了安全区，
+        // 这一层不扩的话，状态栏里透出的是窗口默认底色，
+        // 和页面渐变叠成两层，状态栏文字直接看不清。
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-        // 添加点播源
+        // 顶部磨砂渐隐：内容从状态栏下面滚过时被这一段虚化，
+
+        // 并且往下越来越清，看不到过渡区的边缘。
+
+        BlurFade({ edge: 'top', band: SystemInsets.top() + 58, fade: 34, radius: 26 })
+
+
+        // 玻璃导航条（方案 A）：浮在内容之上
+        Row({ space: 8 }) {
+          Row() {
+            Image($r('app.media.ic_back'))
+              .width(20)
+              .height(20)
+          }
+          .width(32)
+          .height(40)
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.navPathStack.pop();
+          })
+          Text('视频源')
+            .fontSize(17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.color_text'))
+            .layoutWeight(1)
+          Text('导入')
+            .fontSize(14)
+            .fontColor($r('app.color.color_primary'))
+            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .onClick(() => {
+              this.showImport = !this.showImport;
+            })
+          Text('导出')
+            .fontSize(14)
+            .fontColor($r('app.color.color_primary'))
+            .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .onClick(() => {
+              this.exportSources();
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 12 + SystemInsets.top(), bottom: 6 })
+        // 纯文字导航：去掉底色 / 磨砂 / 描边，与页面背景融为一体
+        }
+        .width('100%')
+        .height('100%')
+
+        // 浮层面板（方案 A）：底部弹出玻璃面板
         if (this.showAddVod) {
           this.addVodForm()
         }
-        // 添加直播源
         if (this.showAddLive) {
           this.addLiveForm()
         }
-        // 导入订阅
         if (this.showImport) {
           this.importForm()
         }
-        // 导出
         if (this.showExport) {
           this.exportPanel()
         }
@@ -538,6 +640,10 @@ export struct SourcesPage {
   @Builder
   vodPanel() {
     Column({ space: 10 }) {
+      // 顶部占位：让内容不被浮在上面的玻璃导航条遮住
+      Column()
+        .width('100%')
+        .height(56 + SystemInsets.top())
       Row({ space: 8 }) {
         Button() {
           Text('添加点播源')
@@ -552,14 +658,31 @@ export struct SourcesPage {
           this.showAddVod = !this.showAddVod;
         })
         Button() {
-          Text('一键导入推荐源')
-            .fontSize(13)
-            .fontColor($r('app.color.color_text'))
+          // 导入期间变成「转圈 + 正在导入…」：这是用户点击后 60ms 内就能看到的
+          // 第一个反馈，不用等落盘结束。
+          Row({ space: 6 }) {
+            if (this.importingRec) {
+              LoadingProgress()
+                .width(14)
+                .height(14)
+                .color($r('app.color.color_on_success'))
+            }
+            Text(this.importingRec ? '正在导入…' : '一键导入推荐源')
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.color_on_success'))
+              .maxLines(1)
+          }
+          .alignItems(VerticalAlign.Center)
+          .justifyContent(FlexAlign.Center)
         }
         .layoutWeight(1)
         .height(38)
-        .backgroundColor($r('app.color.color_chip_bg'))
+        .backgroundColor($r('app.color.color_success_btn'))
         .borderRadius(19)
+        // 导入中禁掉点击，避免连点重复导入
+        .enabled(!this.importingRec)
+        .opacity(this.importingRec ? 0.75 : 1)
         .onClick(() => {
           this.importRecommended();
         })
@@ -623,7 +746,7 @@ export struct SourcesPage {
               }
               .width('100%')
               .padding(12)
-              .backgroundColor($r('app.color.color_card'))
+              .backgroundColor($r('app.color.color_glass'))
               .borderRadius(10)
             }
           // key 必须带上开关/健康状态：点停用后对象只是就地改字段、key 不变，
@@ -643,6 +766,10 @@ export struct SourcesPage {
   @Builder
   livePanel() {
     Column({ space: 10 }) {
+      // 顶部占位：让内容不被浮在上面的玻璃导航条遮住
+      Column()
+        .width('100%')
+        .height(56 + SystemInsets.top())
       Button() {
         Text('添加直播源')
           .fontSize(13)
@@ -713,7 +840,7 @@ export struct SourcesPage {
               }
               .width('100%')
               .padding(12)
-              .backgroundColor($r('app.color.color_card'))
+              .backgroundColor($r('app.color.color_glass'))
               .borderRadius(10)
             }
           // 同点播源：key 带上状态，开关/状态标签实时跟着变
@@ -765,7 +892,9 @@ export struct SourcesPage {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor($r('app.color.color_card'))
+    .backgroundColor($r('app.color.color_panel_glass'))
+    .backgroundEffect({ radius: 26, saturation: 1.5 })
+    .border({ width: 1, color: $r('app.color.color_nav_border') })
     .borderRadius(10)
   }
 
@@ -811,7 +940,9 @@ export struct SourcesPage {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor($r('app.color.color_card'))
+    .backgroundColor($r('app.color.color_panel_glass'))
+    .backgroundEffect({ radius: 26, saturation: 1.5 })
+    .border({ width: 1, color: $r('app.color.color_nav_border') })
     .borderRadius(10)
   }
 
@@ -862,50 +993,110 @@ export struct SourcesPage {
         .backgroundColor($r('app.color.color_chip_bg'))
         .borderRadius(8)
         .padding(10)
-      Row({ space: 16 }) {
-        Text('关闭')
-          .fontSize(13)
-          .fontColor($r('app.color.color_text_secondary'))
+      if (this.importBusy) {
+        Row({ space: 10 }) {
+          Row({ space: 8 }) {
+            LoadingProgress()
+              .width(16)
+              .height(16)
+              .color($r('app.color.color_primary'))
+            Text('处理中…')
+              .fontSize(14)
+              .fontColor($r('app.color.color_text_secondary'))
+          }
+          .layoutWeight(1)
+          .height(44)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor($r('app.color.color_chip_bg'))
+          .borderRadius(22)
+          Button() {
+            Text('关闭')
+              .fontSize(14)
+              .fontColor($r('app.color.color_text_secondary'))
+          }
+          .width(64)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.color_chip_bg'))
           .onClick(() => {
             this.showImport = false;
           })
-        if (this.importBusy) {
-          Text('处理中…')
-            .fontSize(13)
-            .fontColor($r('app.color.color_text_secondary'))
-        } else {
-          Text('从地址导入')
-            .fontSize(13)
-            .fontColor($r('app.color.color_primary'))
-            .onClick(() => {
-              this.importFromUrl();
-            })
-          Text('扫码导入')
-            .fontSize(13)
-            .fontColor($r('app.color.color_primary'))
-            .onClick(() => {
-              this.importFromScan();
-            })
-          Text('从本地文件导入')
-            .fontSize(13)
-            .fontColor($r('app.color.color_primary'))
-            .onClick(() => {
-              this.importFromLocalFile();
-            })
-          Text('从粘贴内容导入')
-            .fontSize(13)
-            .fontColor($r('app.color.color_primary'))
-            .onClick(() => {
-              this.importFromText();
-            })
         }
+        .width('100%')
+      } else {
+        Row({ space: 10 }) {
+          Button() {
+            Text('从地址导入')
+              .fontSize(14)
+              .fontColor(Color.White)
+          }
+          .layoutWeight(1)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.color_primary'))
+          .onClick(() => {
+            this.importFromUrl();
+          })
+          Button() {
+            Text('从粘贴内容导入')
+              .fontSize(14)
+              .fontColor($r('app.color.color_text'))
+          }
+          .layoutWeight(1)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.color_chip_bg'))
+          .onClick(() => {
+            this.importFromText();
+          })
+        }
+        .width('100%')
+        Row({ space: 10 }) {
+          Button() {
+            Text('扫码导入')
+              .fontSize(14)
+              .fontColor($r('app.color.color_text'))
+          }
+          .layoutWeight(1)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.color_chip_bg'))
+          .onClick(() => {
+            this.importFromScan();
+          })
+          Button() {
+            Text('从本地文件导入')
+              .fontSize(14)
+              .fontColor($r('app.color.color_text'))
+          }
+          .layoutWeight(1)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.color_chip_bg'))
+          .onClick(() => {
+            this.importFromLocalFile();
+          })
+          Button() {
+            Text('关闭')
+              .fontSize(14)
+              .fontColor($r('app.color.color_text_secondary'))
+          }
+          .width(64)
+          .height(44)
+          .borderRadius(22)
+          .backgroundColor($r('app.color.color_chip_bg'))
+          .onClick(() => {
+            this.showImport = false;
+          })
+        }
+        .width('100%')
       }
-      .width('100%')
-      .justifyContent(FlexAlign.End)
     }
     .width('100%')
-    .padding(12)
-    .backgroundColor($r('app.color.color_card'))
+    .padding({ left: 12, right: 12, top: 12, bottom: 16 })
+    .backgroundColor($r('app.color.color_panel_glass'))
+    .backgroundEffect({ radius: 26, saturation: 1.5 })
+    .border({ width: 1, color: $r('app.color.color_nav_border') })
     .borderRadius(10)
   }
 
@@ -947,7 +1138,9 @@ export struct SourcesPage {
     }
     .width('100%')
     .padding(12)
-    .backgroundColor($r('app.color.color_card'))
+    .backgroundColor($r('app.color.color_panel_glass'))
+    .backgroundEffect({ radius: 26, saturation: 1.5 })
+    .border({ width: 1, color: $r('app.color.color_nav_border') })
     .borderRadius(10)
   }
 }
