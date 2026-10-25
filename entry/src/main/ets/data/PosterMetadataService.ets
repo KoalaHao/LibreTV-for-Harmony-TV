@@ -2,7 +2,8 @@ import { HttpClient } from '../net/HttpClient';
 import { Store } from './Store';
 import { PosterCardData, PosterCardInfo, PosterStaticInfo } from '../model/PosterCardData';
 
-interface PosterCacheEntry { info: PosterStaticInfo; }
+interface PosterMetrics { rating: string; shortComments: number; updatedAt: number; }
+interface PosterCacheEntry { info: PosterStaticInfo; metrics?: PosterMetrics; }
 interface PosterMetadataJob {
   subjectId: string;
   seriesHint: boolean;
@@ -19,22 +20,27 @@ export class PosterMetadataService {
   private static blockedUntil: number = 0;
   private static nextDetailAt: number = 0;
   private static readonly PREFIX: string = 'poster_static_v2_';
-  private static readonly INDEX: string = 'poster_static_index_v2';
+  private static readonly METRICS_TTL: number = 2 * 24 * 60 * 60 * 1000;
   private static legacyRemoved: boolean = false;
 
   static peek(subjectId: string): PosterCardInfo | null {
     if (!/^\d{7,10}$/.test(subjectId)) return null;
     PosterMetadataService.removeLegacyCache();
     const memory = PosterMetadataService.cache.get(subjectId);
-    if (memory !== undefined) return PosterCardData.fromStatic(memory.info);
+    if (memory !== undefined) {
+      PosterMetadataService.remember(subjectId, memory);
+      return PosterMetadataService.toInfo(memory);
+    }
     try {
       const text = Store.shared().getJson(PosterMetadataService.PREFIX + subjectId);
       if (text === '' || text.length > 8000) return null;
       const entry = JSON.parse(text) as Record<string, Object>;
       const info = PosterCardData.restore(JSON.stringify(entry['info']), subjectId);
       if (info === null) return null;
-      PosterMetadataService.cache.set(subjectId, { info: PosterCardData.stable(info) });
-      return info;
+      const cached: PosterCacheEntry = { info: PosterCardData.stable(info),
+        metrics: PosterMetadataService.readMetrics(entry['metrics']) };
+      PosterMetadataService.remember(subjectId, cached);
+      return PosterMetadataService.toInfo(cached);
     } catch (e) { return null; }
   }
 
@@ -42,6 +48,10 @@ export class PosterMetadataService {
     if (!/^\d{7,10}$/.test(subjectId)) return Promise.resolve(null);
     const previous = PosterMetadataService.peek(subjectId);
     const now = Date.now();
+    const cached = PosterMetadataService.cache.get(subjectId);
+    if (cached !== undefined && cached.metrics !== undefined && now - cached.metrics.updatedAt < PosterMetadataService.METRICS_TTL) {
+      return Promise.resolve(previous);
+    }
     if ((PosterMetadataService.blockedUntil > now && previous !== null) ||
       (PosterMetadataService.retryAfter.get(subjectId) || 0) > now) {
       return Promise.resolve(previous);
@@ -67,6 +77,7 @@ export class PosterMetadataService {
 
   private static async run(job: PosterMetadataJob): Promise<void> {
     let result: PosterCardInfo | null = null;
+    let refreshed: boolean = false;
     try {
       if (Date.now() >= PosterMetadataService.blockedUntil) {
         const kinds: string[] = job.seriesHint ? ['tv', 'movie'] : ['movie', 'tv'];
@@ -92,6 +103,7 @@ export class PosterMetadataService {
             if (info !== null) {
               result = info;
               PosterMetadataService.save(info);
+              refreshed = true;
             }
             break;
           }
@@ -111,10 +123,11 @@ export class PosterMetadataService {
         }
       }
     } catch (e) {
-      // Keep usable cached fields and the original feed on offline/timeout errors.
+      result = PosterMetadataService.peek(job.subjectId);
     } finally {
-      if (result === null || !result.liveMetadata) {
-        PosterMetadataService.retryAfter.set(job.subjectId, Date.now() + 15 * 60 * 1000);
+      if (!refreshed) {
+        PosterMetadataService.retryAfter.set(job.subjectId,
+          Math.max(Date.now() + 60000, PosterMetadataService.blockedUntil));
       } else PosterMetadataService.retryAfter.delete(job.subjectId);
       PosterMetadataService.pending.delete(job.subjectId);
       PosterMetadataService.active--;
@@ -124,29 +137,46 @@ export class PosterMetadataService {
   }
 
   private static save(info: PosterCardInfo): void {
-    const entry: PosterCacheEntry = { info: PosterCardData.stable(info) };
-    PosterMetadataService.cache.set(info.subjectId, entry);
+    const previous = PosterMetadataService.cache.get(info.subjectId);
+    const entry: PosterCacheEntry = { info: PosterCardData.stable(info), metrics: info.liveMetadata ? {
+      rating: info.rating, shortComments: info.shortComments, updatedAt: Date.now()
+    } : (previous !== undefined ? previous.metrics : undefined) };
+    PosterMetadataService.remember(info.subjectId, entry);
     const store = Store.shared();
     store.putJson(PosterMetadataService.PREFIX + info.subjectId, JSON.stringify(entry));
-    let ids: string[] = [];
-    try {
-      const value = JSON.parse(store.getJson(PosterMetadataService.INDEX)) as Object;
-      if (Array.isArray(value)) {
-        for (const id of value as Object[]) {
-          if (typeof id === 'string' && /^\d{7,10}$/.test(id) && id !== info.subjectId && ids.indexOf(id) < 0) ids.push(id);
-        }
-      }
-    } catch (e) { /* Empty cache index. */ }
-    ids.push(info.subjectId);
-    while (ids.length > 200) {
-      const id = ids.shift();
-      if (id !== undefined) {
-        store.remove(PosterMetadataService.PREFIX + id);
+  }
+
+  private static remember(subjectId: string, entry: PosterCacheEntry): void {
+    PosterMetadataService.cache.delete(subjectId);
+    PosterMetadataService.cache.set(subjectId, entry);
+    if (PosterMetadataService.cache.size > 200) {
+      for (const id of PosterMetadataService.cache.keys()) {
         PosterMetadataService.cache.delete(id);
-        PosterMetadataService.retryAfter.delete(id);
+        break;
       }
     }
-    store.putJson(PosterMetadataService.INDEX, JSON.stringify(ids));
+    // Only the in-memory working set is bounded. Disk entries are never evicted.
+  }
+
+  private static toInfo(entry: PosterCacheEntry): PosterCardInfo {
+    const info = PosterCardData.fromStatic(entry.info);
+    if (entry.metrics !== undefined) {
+      info.rating = entry.metrics.rating;
+      info.shortComments = entry.metrics.shortComments;
+    }
+    return info;
+  }
+
+  private static readMetrics(value: Object): PosterMetrics | undefined {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const data = value as Record<string, Object>;
+    const updatedAt = data['updatedAt'];
+    const rating = data['rating'];
+    const count = data['shortComments'];
+    if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt <= 0 || updatedAt > Date.now() + 60000 ||
+      typeof rating !== 'string' || (rating !== '' && (!Number.isFinite(Number(rating)) || Number(rating) <= 0 || Number(rating) > 10)) ||
+      typeof count !== 'number' || !Number.isInteger(count) || count < -1 || count > 1000000000) return undefined;
+    return { rating: rating === '' ? '' : Number(rating).toFixed(1), shortComments: count, updatedAt: updatedAt };
   }
 
   private static removeLegacyCache(): void {

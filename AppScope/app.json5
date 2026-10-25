@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.libretv.harmonyos",
     "vendor": "libretv",
-    "versionCode": 1100115,
-    "versionName": "1.10.0-tv.13",
+    "versionCode": 1100116,
+    "versionName": "1.10.0-tv.14",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

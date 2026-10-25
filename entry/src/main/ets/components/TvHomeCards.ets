@@ -84,6 +84,7 @@ export struct TvPosterCard {
   private requesting: boolean = false;
   private requestToken: number = 0;
   private loadedVisible: boolean = false;
+  private refreshTimer: number = -1;
 
   aboutToAppear(): void {
     this.alive = true;
@@ -94,6 +95,7 @@ export struct TvPosterCard {
     this.alive = false;
     this.requestToken++;
     this.visible = false;
+    this.syncRefreshTimer();
   }
 
   private subjectChanged(): void {
@@ -105,6 +107,7 @@ export struct TvPosterCard {
     this.info = cached !== null ? cached : PosterCardData.empty(this.subjectId, this.seriesHint);
     this.infoKnown = cached !== null;
     if (this.visible) this.loadDetails();
+    this.syncRefreshTimer();
   }
 
   private async loadDetails(): Promise<void> {
@@ -125,7 +128,20 @@ export struct TvPosterCard {
     }
   }
 
+  private syncRefreshTimer(): void {
+    if (this.alive && this.visible && this.subjectId !== '' && this.refreshTimer < 0) {
+      this.refreshTimer = setInterval(() => {
+        this.loadedVisible = false;
+        this.loadDetails();
+      }, 30000);
+    } else if ((!this.alive || !this.visible || this.subjectId === '') && this.refreshTimer >= 0) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = -1;
+    }
+  }
+
   private score(): string {
+    if (this.info.rating !== '') return this.info.rating;
     if (this.liveKnown) return this.info.rating !== '' ? this.info.rating : '暂无评分';
     const value = Number(this.rating);
     if (Number.isFinite(value) && value > 0 && value <= 10) return value.toFixed(1);
@@ -211,11 +227,11 @@ export struct TvPosterCard {
     .onBlur(() => { this.focused = false; })
     .onVisibleAreaChange([0.01], (visible: boolean, ratio: number) => {
       this.visible = visible;
+      this.syncRefreshTimer();
       if (visible) this.loadDetails();
       else {
         this.loadedVisible = false;
         this.liveKnown = false;
-        this.info = PosterCardData.fromStatic(this.info);
         this.requestToken++;
         this.requesting = false;
       }
