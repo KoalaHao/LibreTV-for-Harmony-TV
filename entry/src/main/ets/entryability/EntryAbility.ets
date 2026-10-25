@@ -2,7 +2,7 @@
  * 应用入口：初始化本地存储、源管理与下载管理器
  */
 
-import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want, wantConstant } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -15,6 +15,8 @@ import { DevicePolicy } from '../common/DevicePolicy';
 import { AppLifecycle } from '../common/AppLifecycle';
 import { SystemInsets } from '../common/SystemInsets';
 import { DeepLink, ShareLink } from '../common/ShareLink';
+import { PlaybackContinuation } from '../common/PlaybackContinuation';
+import { ContinuationService } from '../common/ContinuationService';
 
 export default class EntryAbility extends UIAbility {
   /** 主窗口句柄：状态栏着色 / 主题切换后重涂都靠它 */
@@ -24,7 +26,8 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0001, 'LibreTV', 'EntryAbility onCreate');
     Store.shared().init(this.context);
     // 冷启动可能正是被分享链接拉起来的：先收下，等首页挂载后由 DeepLink 补发
-    this.handleSharedLink(want);
+    ContinuationService.bind(this.context);
+    this.handleLaunch(want, launchParam);
     // 预热各单例，避免首屏读取竞态
     SourceManager.shared().load();
     DownloadManager.shared().init(this.context);
@@ -49,7 +52,40 @@ export default class EntryAbility extends UIAbility {
    * 等 IndexPage 就位再补发。
    */
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    this.handleLaunch(want, launchParam);
+  }
+
+  private handleLaunch(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
+      const data = want.parameters !== undefined ? want.parameters[PlaybackContinuation.KEY] : undefined;
+      if (typeof data !== 'string' || !PlaybackContinuation.receive(data)) {
+        // Do not log the payload: it may contain a temporary authenticated media URL.
+        hilog.warn(0x0001, 'LibreTV', 'Invalid playback continuation data');
+      }
+      return;
+    }
     this.handleSharedLink(want);
+  }
+
+  onContinue(wantParam: Record<string, Object>): AbilityConstant.OnContinueResult {
+    const targetVersion = wantParam['version'];
+    if (typeof targetVersion !== 'number' || targetVersion < PlaybackContinuation.MIN_VERSION) {
+      return AbilityConstant.OnContinueResult.MISMATCH;
+    }
+    if (!ContinuationService.granted(this.context)) return AbilityConstant.OnContinueResult.REJECT;
+    const data = PlaybackContinuation.capture();
+    if (data === null) return AbilityConstant.OnContinueResult.REJECT;
+    wantParam[PlaybackContinuation.KEY] = data;
+    // Navigation is restored explicitly through our inbox, not the router-only automatic page stack.
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_PAGE_STACK_KEY] = false;
+    // The OS closes the source only after migration succeeds. Preparing data must not pause playback.
+    wantParam[wantConstant.Params.SUPPORT_CONTINUE_SOURCE_EXIT_KEY] = true;
+    return AbilityConstant.OnContinueResult.AGREE;
+  }
+
+  onWindowStageRestore(windowStage: window.WindowStage): void {
+    // Continuation invokes Restore instead of Create, including on a cold start.
+    if (this.win === null) this.onWindowStageCreate(windowStage);
   }
 
   /** 从 want.uri 里取分享链接；不是本应用的链接直接忽略 */
@@ -240,6 +276,7 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     AppLifecycle.setBackground(false);
+    ContinuationService.sync();
     // 回到前台立刻重挂中断的下载。
     // 后台期间系统会冻结应用线程，HttpRequest 的回调可能再也回不来；
     // 只靠 60s 看门狗太慢，用户看到的就是「进度条一直不动」。
@@ -253,7 +290,14 @@ export default class EntryAbility extends UIAbility {
     AppLifecycle.setBackground(true);
   }
 
+  onDestroy(): void {
+    ContinuationService.unbind();
+    // Source exit after a successful system migration must also stop AVPlayer and PiP.
+    PlaybackContinuation.shutdown();
+  }
+
   onWindowStageDestroy(): void {
+    this.win = null;
     hilog.info(0x0001, 'LibreTV', 'onWindowStageDestroy');
   }
 }

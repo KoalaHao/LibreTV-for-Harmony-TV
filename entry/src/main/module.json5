@@ -14,6 +14,11 @@
     "pages": "$profile:main_pages",
     "requestPermissions": [
       {
+        "name": "ohos.permission.DISTRIBUTED_DATASYNC",
+        "reason": "$string:permission_continuation_reason",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      },
+      {
         "name": "ohos.permission.INTERNET",
         "reason": "$string:permission_internet_reason",
         "usedScene": {
@@ -62,6 +67,9 @@
         "maxWindowWidth": 3840,
         "maxWindowHeight": 2160,
         "exported": true,
+        "launchType": "singleton",
+        "continuable": true,
+        "continueType": ["libretv_vod"],
         "skills": [
           {
             "entities": [

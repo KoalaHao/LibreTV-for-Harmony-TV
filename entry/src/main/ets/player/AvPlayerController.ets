@@ -23,6 +23,15 @@ export class AvPlayerController {
   private pendingSeekMs: number = 0;
   private prepared: boolean = false;
   private wantPlay: boolean = false;
+  private autoPlay: boolean = true;
+
+  private preciseResume: boolean = false;
+
+  configureAutoPlay(enabled: boolean, preciseResume: boolean = false): void {
+    this.autoPlay = enabled;
+    this.preciseResume = preciseResume;
+  }
+  wantsAutoPlay(): boolean { return this.autoPlay; }
   private lastDurationMs: number = 0;
   /**
    * 播放音量（0~1）。
@@ -186,11 +195,11 @@ export class AvPlayerController {
       }
     }
     this.prepared = false;
-    this.wantPlay = true;
+    this.wantPlay = this.autoPlay;
     this.pendingSeekMs = seekMs > 0 ? seekMs : 0;
     const requestSR = this.superResolution && this.superResolutionAvailable;
     this.onSuperResolutionState(requestSR ? 'requesting' : (this.superResolution ? 'unavailable' : 'off'));
-    const strategy: media.PlaybackStrategy = { preferredBufferDuration: 20 };
+    const strategy: media.PlaybackStrategy = { preferredBufferDuration: 20, showFirstFrameOnPrepare: true };
     if (requestSR) strategy.enableSuperResolution = true;
     try {
       p.setMediaSource(source, strategy);
@@ -283,7 +292,7 @@ export class AvPlayerController {
             const target = this.pendingSeekMs;
             this.pendingSeekMs = 0;
             try {
-              player.seek(target, media.SeekMode.SEEK_PREV_SYNC);
+              player.seek(target, this.preciseResume ? media.SeekMode.SEEK_CLOSEST : media.SeekMode.SEEK_PREV_SYNC);
             } catch (e) {
               // seek 失败不阻塞播放
             }
@@ -451,6 +460,7 @@ export class AvPlayerController {
   }
 
   play(): void {
+    this.autoPlay = true;
     const player = this.player;
     if (player === null) {
       return;
@@ -464,6 +474,7 @@ export class AvPlayerController {
   }
 
   pause(): void {
+    this.autoPlay = false;
     const player = this.player;
     if (player === null) {
       return;

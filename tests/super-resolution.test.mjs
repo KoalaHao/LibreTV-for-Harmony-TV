@@ -100,3 +100,22 @@ test('SR rejection that poisons the native instance recreates it before ordinary
   assert.equal(states.at(-1), 'unavailable');
   assert.deepEqual(errors, []);
 });
+
+test('paused continuation prepares and seeks precisely without emitting play; normal resume retains autoplay', async () => {
+  globalThis.__testMedia.SeekMode = { SEEK_CLOSEST: 2, SEEK_PREV_SYNC: 0 };
+  for (const autoplay of [false, true]) {
+    const { native, controller } = await setup({}, false);
+    const calls = [];
+    native.duration = 900000;
+    native.setVolume = () => {};
+    native.seek = (position, mode) => calls.push(['seek', position, mode]);
+    native.play = () => calls.push(['play']);
+    controller.configureAutoPlay(autoplay, true);
+    await controller.playUrl('https://example.test/4.m3u8', {}, 123450);
+    native.state = 'prepared';
+    native.listeners.get('stateChange')('prepared');
+    assert.deepEqual(calls[0], ['seek', 123450, 2]);
+    assert.equal(calls.filter(c => c[0] === 'play').length, autoplay ? 1 : 0);
+    assert.equal(native.strategies[0].showFirstFrameOnPrepare, true);
+  }
+});

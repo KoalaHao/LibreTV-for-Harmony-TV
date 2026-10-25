@@ -2,12 +2,14 @@
  * 播放页：全屏播放（点播 / 离线缓存）、进度续播、倍速、选集、换源、自动连播
  */
 
+import { ContinuedPlayback, PlaybackContinuation } from '../common/PlaybackContinuation';
+import { ContinuationService } from '../common/ContinuationService';
 import { TvLayout } from '../common/TvLayout';
 import { KeyCode } from '@kit.InputKit';
 import { TV_FOCUS } from '../common/TvFocus';
 import { BackNavigation } from '../common/BackNavigation';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { window, PiPWindow } from '@kit.ArkUI';
+import { window, PiPWindow, promptAction } from '@kit.ArkUI';
 import { AvPlayerController, PlaybackSpeedOption } from '../player/AvPlayerController';
 import { DevicePolicy } from '../common/DevicePolicy';
 import { audio, AVVolumePanel } from '@kit.AudioKit';
@@ -48,6 +50,8 @@ export interface PlayerPageParam {
   pic?: string;
   /** 播放线路下标；详情页选了非默认线路时传入 */
   lineIndex?: number;
+  initialSpeed?: number;
+  playWhenReady?: boolean;
 }
 
 @Component
@@ -73,6 +77,9 @@ export struct PlayerPage {
   pic: string = '';
   /** 播放线路下标：优先取该线路的分集 */
   lineIndex: number = 0;
+  initialSpeed: number = 0;
+  playWhenReady: boolean = true;
+  private continuationOwner: number = -1;
 
   private player: AvPlayerController = new AvPlayerController();
   private holderFile: fs.File | null = null;
@@ -254,7 +261,8 @@ export struct PlayerPage {
       this.cacheDir = hostCtx.filesDir + '/play';
     }
     this.currentEp = this.episode;
-    this.speedValue = this.settings.defaultSpeed;
+    this.speedValue = this.initialSpeed > 0 ? this.initialSpeed : this.settings.defaultSpeed;
+    this.player.configureAutoPlay(this.playWhenReady, this.initialSpeed > 0);
     this.positionText = Utils.formatTime(this.positionMs);
     // 收藏态在构造参数注入后即可读取（详情页 / 历史页都已带 sourceKey+vodId）
     this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
@@ -276,6 +284,7 @@ export struct PlayerPage {
   }
 
   aboutToDisappear(): void {
+    if (this.released) return;
     // 每一件清理都单独包一层：以前是一串裸调用，前面任何一步抛错，
     // 后面的「交还窗口布局」「释放播放器」就整段被跳过 ——
     // 症状正是「已经回到列表，界面却顶到状态栏底下、声音还在放」。
@@ -393,6 +402,8 @@ export struct PlayerPage {
     this.pic = p.pic !== undefined ? p.pic : '';
     this.lineIndex = p.lineIndex !== undefined ? p.lineIndex : 0;
     this.currentEp = p.episode;
+    this.initialSpeed = p.initialSpeed !== undefined ? p.initialSpeed : 0;
+    this.playWhenReady = p.playWhenReady !== undefined ? p.playWhenReady : true;
     // 缓存节点复用时收藏态也要跟着新参数刷新
     this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
   }
@@ -443,7 +454,8 @@ export struct PlayerPage {
     this.holdScreen();
     this.settings = SettingsStore.shared().get();
     this.player.configureSuperResolution(DevicePolicy.isTV() && this.settings.superResolution);
-    this.speedValue = this.settings.defaultSpeed;
+    this.speedValue = this.initialSpeed > 0 ? this.initialSpeed : this.settings.defaultSpeed;
+    this.player.configureAutoPlay(this.playWhenReady, this.initialSpeed > 0);
     this.syncSystemVolume();
     this.initCastSession();
     AppLifecycle.bgHandler = (background: boolean) => {
@@ -501,6 +513,13 @@ export struct PlayerPage {
       // 会异步抛 5400102「unsupport speed operation」，try/catch 拦不住，直接弹错误界面。
       // 真正的应用时机放到第一次 playing（见 onPlayStateChanged）。
       this.speedApplied = false;
+      if (!this.player.wantsAutoPlay()) {
+        this.hasStarted = true;
+        this.showLoading = false;
+        this.clearLoadingTimer();
+        this.clearWatchdog();
+      }
+      PlaybackContinuation.refresh();
     };
     this.player.onProgress = (positionMs: number, durationMs: number) => {
       // 持续记录当前位置：画中画进出或画面重建导致重新 create 时，
@@ -548,6 +567,7 @@ export struct PlayerPage {
           }
         }
       }
+      PlaybackContinuation.refresh();
     };
     this.player.onCompleted = () => {
       this.saveProgress();
@@ -563,6 +583,7 @@ export struct PlayerPage {
     };
     this.player.onError = (message: string) => {
       this.errorText = message;
+      PlaybackContinuation.refresh();
       this.buffering = false;
       this.clearStall();
       this.clearWatchdog();
@@ -916,6 +937,7 @@ export struct PlayerPage {
     // 换集/换源/重试都是「重新起播」：回到未起播状态，加载圈立即出现，
     // 同时把旧的延迟计时清掉，避免上一次的计时器误触发。
     this.hasStarted = false;
+    PlaybackContinuation.refresh();
     this.showLoading = true;
     this.clearLoadingTimer();
     this.clearStall();
@@ -1100,6 +1122,13 @@ export struct PlayerPage {
       return;
     }
     this.released = true;
+    this.releaseCastSession();
+    this.clearStall();
+    this.clearWatchdog();
+    this.clearLoadingTimer();
+    this.clearAdjustTimer();
+    if (this.offlineDir !== '') LocalHttpServer.shared().stop();
+    PlaybackContinuation.unregister(this.continuationOwner);
     this.player.release();
     this.dropScreen();
     if (this.holderFile !== null) {
@@ -1231,6 +1260,7 @@ export struct PlayerPage {
       return;
     }
     this.currentEp = idx;
+    this.player.configureAutoPlay(true);
     this.positionMs = 0;
     this.positionText = '00:00';
     this.sliderValue = 0;
@@ -1814,6 +1844,48 @@ export struct PlayerPage {
     this.navPathStack.pop();
   }
 
+  private continuationState(): ContinuedPlayback | null {
+    if (this.released || !this.hasStarted || this.errorText !== '' || this.offlineDir !== '') return null;
+    const ep = this.currentEpisode();
+    if (ep === null || !PlaybackContinuation.remoteUrl(ep.url)) return null;
+    return {
+      schema: 1, transferId: '', sourceKey: this.sourceKey, vodId: this.vodId,
+      episode: this.currentEp, episodeName: ep.name, title: this.title, pic: this.resolvePic() ?? '',
+      lineIndex: this.lineIndex, positionMs: Math.max(0, Math.floor(this.positionMs)),
+      speed: this.speedValue, playing: this.playing, episodeUrl: ep.url
+    };
+  }
+
+  private showShareOptions(): void {
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: '影片分享',
+      buttons: [
+        { text: '分享影片链接', color: '#D39B36' },
+        { text: '跨设备续播', color: '#D39B36' }
+      ]
+    }).then((result: promptAction.ActionMenuSuccessResponse) => {
+      if (result.index === 0) this.shareMovie();
+      else if (result.index === 1) this.enableContinuation();
+    }).catch(() => {});
+  }
+
+  private async enableContinuation(): Promise<void> {
+    if (this.offlineDir !== '') {
+      this.toast('离线文件保存在本机，请播放在线影片后接续');
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    if (ctx === undefined || !await ContinuationService.enable(ctx)) {
+      this.toast('请允许多设备协同权限后使用接续');
+      return;
+    }
+    this.getUIContext().getPromptAction().showDialog({
+      title: '跨设备续播',
+      message: '两端安装相同新版 LibreTV，登录同一华为账号并开启系统“多设备协同 → 接续”。保持在线影片播放页，在另一台设备的系统接续提示中继续观看。也可从电视接回手机。',
+      buttons: [{ text: '知道了', color: '#D39B36' }]
+    });
+  }
+
   private seekFromRemote(position: number): void {
     if (this.durationMs <= 0 || !Number.isFinite(position)) return;
     const target = Math.max(0, Math.min(this.durationMs, position));
@@ -2067,7 +2139,7 @@ export struct PlayerPage {
               .focusable(true)
               .focusBox(TV_FOCUS)
               .onClick(() => {
-                this.shareMovie();
+                this.showShareOptions();
               })
               Stack({ alignContent: Alignment.Center }) {
                 Image($r('app.media.ic_player_fullscreen'))
@@ -2583,6 +2655,7 @@ export struct PlayerPage {
     .onShown(() => {
       BackNavigation.register('Player', () => this.handleBack());
       this.onPageShown();
+      this.continuationOwner = PlaybackContinuation.register(() => this.continuationState(), () => this.back(), () => this.release());
     })
     .onBackPressed(() => {
       this.handleBack();

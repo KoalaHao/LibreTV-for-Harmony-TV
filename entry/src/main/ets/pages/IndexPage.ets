@@ -3,6 +3,7 @@
  * 作为 Navigation 根页面承载全部子页面路由
  */
 
+import { ContinuedPlayback, PlaybackContinuation } from '../common/PlaybackContinuation';
 import { TV_FOCUS } from '../common/TvFocus';
 import { BackNavigation } from '../common/BackNavigation';
 import { display } from '@kit.ArkUI';
@@ -169,6 +170,8 @@ const LIVE_EXPAND_BOTTOM: number = 76;
 @Component
 struct IndexPage {
   private navStack: NavPathStack = new NavPathStack();
+  private navigationReady: boolean = false;
+  private pendingPlayback: ContinuedPlayback | null = null;
   /** 推荐翻页起点：豆瓣按 page_start 分页，固定传 0 就会永远返回同一批「换一换」内容 */
   private recPageStart: number = 0;
   /** 历史封面回填是否已跑过，避免每次刷新重复请求 */
@@ -300,6 +303,10 @@ struct IndexPage {
       this.refreshCounts();
     };
     // 分享链接的落点：必须用箭头函数（成员方法当回调会丢 this）
+    PlaybackContinuation.attach((state: ContinuedPlayback) => {
+      this.pendingPlayback = state;
+      this.openContinuedPlayback();
+    });
     DeepLink.attach((link: string) => {
       this.onSharedLink(link);
     });
@@ -310,6 +317,8 @@ struct IndexPage {
   }
 
   aboutToDisappear(): void {
+    this.navigationReady = false;
+    PlaybackContinuation.detach();
     BackNavigation.clear();
     if (this.pullHintTimer !== -1) {
       clearTimeout(this.pullHintTimer);
@@ -389,6 +398,25 @@ struct IndexPage {
       pic: t.pic
     };
     this.navStack.pushPath({ name: 'Player', param: p });
+  }
+
+  private openContinuedPlayback(): void {
+    const state = this.pendingPlayback;
+    if (!this.navigationReady || state === null) return;
+    this.pendingPlayback = null;
+    PlaybackContinuation.stopCurrent();
+    const paths = this.navStack.getAllPathName();
+    if (paths.length > 0 && paths[paths.length - 1] === 'LivePlayer') {
+      BackNavigation.dispatch(paths, () => { this.navStack.pop(); }, () => {});
+    }
+    const param: PlayerPageParam = {
+      sourceKey: state.sourceKey, vodId: state.vodId, title: state.title,
+      episode: state.episode, episodeName: state.episodeName, positionMs: state.positionMs,
+      offlineDir: '', episodeUrl: state.episodeUrl, pic: state.pic, lineIndex: state.lineIndex,
+      initialSpeed: state.speed, playWhenReady: state.playing
+    };
+    this.navStack.pushPath({ name: 'Player', param: param }, { launchMode: LaunchMode.NEW_INSTANCE, animated: false });
+    this.toast('已接续到本设备');
   }
 
   onBackPress(): boolean {
@@ -1485,6 +1513,10 @@ struct IndexPage {
     // 画中画的 navigationId 必须和这个 id 一致：系统首次 setAutoStartEnabled(true) 时
     // 会缓存这个 Navigation 的栈顶信息，从画中画恢复时靠它回到播放页而不是首页。
     .id(NavIds.MAIN)
+    .onAppear(() => {
+      this.navigationReady = true;
+      this.openContinuedPlayback();
+    })
   }
 
 
@@ -1517,7 +1549,9 @@ struct IndexPage {
         offlineDir: (param as PlayerPageParam).offlineDir,
         episodeUrl: (param as PlayerPageParam).episodeUrl !== undefined ? (param as PlayerPageParam).episodeUrl : '',
         pic: (param as PlayerPageParam).pic !== undefined ? (param as PlayerPageParam).pic : '',
-        lineIndex: (param as PlayerPageParam).lineIndex !== undefined ? (param as PlayerPageParam).lineIndex : 0
+        lineIndex: (param as PlayerPageParam).lineIndex !== undefined ? (param as PlayerPageParam).lineIndex : 0,
+        initialSpeed: (param as PlayerPageParam).initialSpeed !== undefined ? (param as PlayerPageParam).initialSpeed : 0,
+        playWhenReady: (param as PlayerPageParam).playWhenReady !== undefined ? (param as PlayerPageParam).playWhenReady : true
       })
     } else if (name === 'LivePlayer') {
       LivePlayerPage({

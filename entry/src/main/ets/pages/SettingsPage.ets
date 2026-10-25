@@ -2,6 +2,8 @@
  * 设置页：广告过滤 / 自动连播 / 成人过滤 / 主题 / 推荐源 / 默认倍速 / 播放历史开关
  */
 
+import { common } from '@kit.AbilityKit';
+import { ContinuationService } from '../common/ContinuationService';
 import { DevicePolicy } from '../common/DevicePolicy';
 import { BackNavigation } from '../common/BackNavigation';
 import { Settings } from '../model/Types';
@@ -65,6 +67,15 @@ export struct SettingsPage {
     this.getUIContext().getPromptAction().showToast({ message: msg, duration: 2000 });
   }
 
+  private async enableContinuation(): Promise<void> {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext | undefined;
+    if (ctx === undefined || !await ContinuationService.enable(ctx)) {
+      this.toast('请允许多设备协同权限后使用接续');
+      return;
+    }
+    this.toast('已授权接续，请在在线影片播放页使用系统接续提示');
+  }
+
   private save(patch: Partial<Settings>): void {
     SettingsStore.shared().update(patch);
   }
@@ -119,6 +130,12 @@ export struct SettingsPage {
                 .padding({ left: 16, top: 8 })
                 .width('100%')
                 .textAlign(TextAlign.Start)
+
+              SettingsRow({
+                rowTitle: '跨设备续播',
+                rowValue: '授权与开启',
+                onRowClick: () => { this.enableContinuation(); }
+              })
 
               SettingsRow({
                 rowTitle: '广告过滤',
