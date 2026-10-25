@@ -9,6 +9,7 @@
  */
 
 import { media } from '@kit.MediaKit';
+import { audio } from '@kit.AudioKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 export interface PlaybackSpeedOption {
@@ -49,6 +50,46 @@ export class AvPlayerController {
    * 所以自己存一份：滑屏调音量时若还没起播，先记住，prepared 时再补上。
    */
   private volume: number = 1.0;
+  private loudnessGainDb: number = 0;
+  private loudnessGeneration: number = 0;
+  private loudnessTask: Promise<boolean> = Promise.resolve(true);
+  private loudnessPending: boolean = false;
+  private loudnessFailed: boolean = false;
+  onLoudnessState: (state: string, gainDb: number) => void = () => {};
+
+  configureLoudnessGain(gainDb: number): void {
+    this.loudnessGeneration++;
+    this.loudnessGainDb = [0, 6, 12].indexOf(gainDb) >= 0 ? gainDb : 0;
+  }
+
+  /** Serialized player-local gain; an old source's response cannot update the new source. */
+  setLoudnessGain(gainDb: number): Promise<boolean> {
+    const previous = this.loudnessGainDb;
+    this.configureLoudnessGain(gainDb);
+    const generation = this.loudnessGeneration;
+    const player = this.player;
+    const value = this.loudnessGainDb;
+    const task = this.loudnessTask.then(async (): Promise<boolean> => {
+      if (player === null || this.player !== player || generation !== this.loudnessGeneration) return false;
+      if (['prepared', 'playing', 'paused', 'completed', 'stopped'].indexOf(player.state) < 0) return false;
+      this.loudnessPending = true;
+      this.loudnessFailed = false;
+      this.onLoudnessState('applying', value);
+      let applied = false;
+      try {
+        if (typeof player.setLoudnessGain !== 'function') throw new Error('Loudness gain unavailable');
+        await player.setLoudnessGain(value);
+        applied = !this.loudnessFailed;
+      } catch (e) { applied = false; }
+      finally { this.loudnessPending = false; }
+      if (this.player !== player || generation !== this.loudnessGeneration) return false;
+      if (!applied) this.loudnessGainDb = previous;
+      this.onLoudnessState(applied ? 'applied' : 'unavailable', value);
+      return applied;
+    });
+    this.loudnessTask = task;
+    return task;
+  }
   private superResolution: boolean = false;
   private superResolutionFeature: boolean = false;
   private superResolutionActive: boolean = false;
@@ -340,6 +381,9 @@ export class AvPlayerController {
       }
     }
     this.currentSource = source;
+    try {
+      p.audioRendererInfo = { usage: audio.StreamUsage.STREAM_USAGE_MOVIE, rendererFlags: 0 };
+    } catch (e) { /* An unavailable gain route must not prevent ordinary playback. */ }
     p.prepare();
     return true;
   }
@@ -406,6 +450,7 @@ export class AvPlayerController {
             // ignore
           }
           this.onPrepared(this.lastDurationMs);
+          const loudnessReady = this.setLoudnessGain(this.loudnessGainDb);
           if (this.pendingSeekMs > 0) {
             const target = this.pendingSeekMs;
             this.pendingSeekMs = 0;
@@ -415,9 +460,9 @@ export class AvPlayerController {
               // seek 失败不阻塞播放
             }
           }
-          if (this.wantPlay) {
-            this.play();
-          }
+          loudnessReady.then(() => {
+            if (this.player === player && player.state === 'prepared' && this.wantPlay) this.play();
+          });
           break;
         case 'playing':
           this.onPlayStateChanged(true);
@@ -437,6 +482,11 @@ export class AvPlayerController {
       }
     });
     player.on('error', (err: BusinessError) => {
+      if (this.player === player && this.loudnessPending && player.state !== 'error' &&
+        [5400102, 5400105, 5400108].indexOf(err.code) >= 0) {
+        this.loudnessFailed = true;
+        return;
+      }
       if (this.superResolutionFeature && (err.code === 5410003 || err.code === 5410004)) {
         this.superResolutionAvailable = false;
         this.onSuperResolutionState('unavailable');
@@ -757,6 +807,7 @@ export class AvPlayerController {
 
   /** 释放播放器（页面销毁时调用） */
   release(): void {
+    this.loudnessGeneration++;
     this.sourceGeneration++;
     this.infoReadId++;
     this.currentSource = null;

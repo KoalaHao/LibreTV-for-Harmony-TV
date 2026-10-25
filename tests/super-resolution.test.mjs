@@ -9,6 +9,7 @@ globalThis.__testMedia = {
 };
 const { AvPlayerController } = await loadEts('player/AvPlayerController.ets', [
   ["import { media } from '@kit.MediaKit';", 'const media = globalThis.__testMedia;'],
+  ["import { audio } from '@kit.AudioKit';", 'const audio = { StreamUsage: { STREAM_USAGE_MOVIE: 3 } };'],
   ["import { BusinessError } from '@kit.BasicServicesKit';", '']
 ]);
 function mockPlayer({ srListener = true, srSource = true, fatalSource = false } = {}) {
@@ -114,6 +115,7 @@ test('paused continuation prepares and seeks precisely without emitting play; no
     await controller.playUrl('https://example.test/4.m3u8', {}, 123450);
     native.state = 'prepared';
     native.listeners.get('stateChange')('prepared');
+    await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(calls[0], ['seek', 123450, 2]);
     assert.equal(calls.filter(c => c[0] === 'play').length, autoplay ? 1 : 0);
     assert.equal(native.strategies[0].showFirstFrameOnPrepare, true);
@@ -217,6 +219,7 @@ test('missing runtime callback reparses the same source at the exact position an
     assert.equal(native.strategies.length, 2);
     native.state = 'prepared';
     native.listeners.get('stateChange')('prepared');
+    await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(calls[0], ['seek', 42420, 2]);
     assert.equal(calls.filter(c => c[0] === 'play').length, playing ? 1 : 0);
   }

@@ -63,6 +63,7 @@ export class HistoryStore {
         if ((newUrl === undefined || newUrl === '') && oldUrl !== undefined && oldUrl !== '') {
           record.playUrl = oldUrl;
         }
+        if (record.loudnessGainDb === undefined) record.loudnessGainDb = list[i].loudnessGainDb;
         list[i] = record;
         found = true;
         break;
@@ -347,6 +348,8 @@ export class HistoryStore {
           sourceName: HistoryStore.str(rec['sourceName']),
           episode: HistoryStore.num(rec['episode'], 0),
           lineIndex: HistoryStore.num(rec['lineIndex'], 0),
+          loudnessGainDb: [0, 6, 12].indexOf(HistoryStore.num(rec['loudnessGainDb'], 0)) >= 0 ?
+            HistoryStore.num(rec['loudnessGainDb'], 0) : 0,
           episodeName: HistoryStore.optStr(rec['episodeName']),
           playUrl: HistoryStore.optStr(rec['playUrl']),
           positionMs: HistoryStore.num(rec['positionMs'], 0),

@@ -144,6 +144,9 @@ export struct PlayerPage {
   @State fitCover: boolean = false;
   /** 系统媒体音量档位（由 AVVolumePanel 写入设备音量，不是播放器内部音量） */
   @State volumeLevel: number = 0;
+  @State private loudnessGainDb: number = 0;
+  @State private loudnessState: string = 'applied';
+  @State private loudnessBusy: boolean = false;
   private volumeMaxLevel: number = 15;
   /** 投屏用的媒体会话：系统投屏列表只认有 AVSession 的应用 */
   private castSession: avSession.AVSession | null = null;
@@ -272,6 +275,7 @@ export struct PlayerPage {
     // 收藏态在构造参数注入后即可读取（详情页 / 历史页都已带 sourceKey+vodId）
     this.favorite = HistoryStore.shared().isFavorite(this.sourceKey, this.vodId);
     this.bindCallbacks();
+    this.loadLoudnessPreference();
     // 前后台变化回调：判断画中画有没有接管，没接管就得自己停住
     AppLifecycle.bgHandler = (background: boolean) => {
       this.handleAppBackground(background);
@@ -464,6 +468,7 @@ export struct PlayerPage {
     this.speedValue = this.initialSpeed > 0 ? this.initialSpeed : this.settings.defaultSpeed;
     this.player.configureAutoPlay(this.playWhenReady, this.initialSpeed > 0);
     this.syncSystemVolume();
+    this.loadLoudnessPreference();
     this.initCastSession();
     AppLifecycle.bgHandler = (background: boolean) => {
       this.handleAppBackground(background);
@@ -508,6 +513,10 @@ export struct PlayerPage {
   }
 
   private bindCallbacks(): void {
+    this.player.onLoudnessState = (state: string, gainDb: number) => {
+      if (this.released) return;
+      this.loudnessState = state;
+    };
     this.player.onSuperResolutionState = (state: string) => {
       this.superResolutionState = state;
     };
@@ -1121,6 +1130,7 @@ export struct PlayerPage {
       episodeName: ep !== null ? ep.name : this.episodeName,
       playUrl: ep !== null ? ep.url : undefined,
       lineIndex: this.lineIndex,
+      loudnessGainDb: this.loudnessGainDb,
       positionMs: pos,
       durationMs: dur,
       updatedAt: Date.now()
@@ -1343,6 +1353,7 @@ export struct PlayerPage {
     this.showSources = false;
     this.sourceKey = item.sourceKey;
     this.vodId = item.vodId;
+    this.loadLoudnessPreference();
     this.episodes = detail.episodes;
     DetailCache.put(this.sourceKey, this.vodId, detail);
     if (this.currentEp >= this.episodes.length) {
@@ -1365,6 +1376,7 @@ export struct PlayerPage {
     this.restartQueued = false;
     this.sourceKey = prevKey;
     this.vodId = prevVodId;
+    this.loadLoudnessPreference();
     this.episodes = prevEpisodes;
     this.currentEp = prevEp;
     this.startRan = false;
@@ -1969,6 +1981,36 @@ export struct PlayerPage {
     return '视频超分：已关闭';
   }
 
+  private loadLoudnessPreference(): void {
+    this.loudnessGainDb = HistoryStore.shared().getProgress(this.sourceKey, this.vodId)?.loudnessGainDb || 0;
+    this.loudnessState = 'pending';
+    this.loudnessBusy = false;
+    this.player.configureLoudnessGain(this.loudnessGainDb);
+  }
+
+  private loudnessLabel(): string {
+    if (this.loudnessBusy || this.loudnessState === 'applying') return '声音补偿 · 设置中';
+    if (this.loudnessState === 'unavailable') return '声音补偿 · 暂不可用';
+    return this.loudnessGainDb > 0 ? '声音补偿 +' + this.loudnessGainDb + ' dB' : '声音补偿 · 关';
+  }
+
+  private async cycleLoudness(): Promise<void> {
+    if (this.loudnessBusy || !this.hasStarted || this.released) return;
+    const sourceKey = this.sourceKey;
+    const vodId = this.vodId;
+    const gain = this.loudnessGainDb === 0 ? 6 : (this.loudnessGainDb === 6 ? 12 : 0);
+    this.loudnessBusy = true;
+    const applied = await this.player.setLoudnessGain(gain);
+    if (this.released || this.sourceKey !== sourceKey || this.vodId !== vodId) return;
+    if (applied) {
+      this.loudnessGainDb = gain;
+      this.saveProgress();
+    } else this.toast('当前音频通路暂不支持声音补偿');
+    this.loudnessBusy = false;
+    this.controlsVisible = true;
+    this.scheduleHideControls();
+  }
+
   private async toggleTvQuality(): Promise<void> {
     if (this.qualityBusy || !this.hasStarted || this.released) return;
     this.qualityBusy = true;
@@ -2338,6 +2380,14 @@ export struct PlayerPage {
                   .maxLines(1)
                   .layoutWeight(1)
                 Row({ space: 6 }) {
+                  Text(this.loudnessLabel())
+                    .fontSize(12).fontColor(this.loudnessGainDb > 0 && this.loudnessState === 'applied' ? '#BFDFFF' : '#FFFFFF')
+                    .backgroundColor(this.loudnessGainDb > 0 ? '#384875A3' : '#26FFFFFF')
+                    .borderRadius(14).height(30).padding({ left: 11, right: 11 })
+                    .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS)
+                    .enabled(!this.loudnessBusy && this.hasStarted && this.errorText === '' && this.sourceKey !== '' && this.vodId !== '')
+                    .accessibilityText('当前片源影片的' + this.loudnessLabel() + '，点击依次选择关闭、加六分贝、加十二分贝')
+                    .onClick(() => { this.cycleLoudness(); })
                   if (DevicePolicy.isTV()) {
                     Text(this.qualityBusy ? '鸿鹄画质 · 切换中' : ('鸿鹄画质 · ' + (this.qualityEnabled ? '开' : '关')))
                       .fontSize(13).fontColor(this.qualityEnabled ? '#A8EBC3' : '#FFFFFF')

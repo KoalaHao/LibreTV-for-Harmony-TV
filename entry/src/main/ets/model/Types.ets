@@ -103,6 +103,8 @@ export interface PlayRecord {
   playUrl?: string;
   /** 播放线路下标（多线路影片记忆所选线路） */
   lineIndex?: number;
+  /** Player-only compensation for this source and title; never a system volume setting. */
+  loudnessGainDb?: number;
   positionMs: number;
   durationMs: number;
   updatedAt: number;

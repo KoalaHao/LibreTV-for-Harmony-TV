@@ -20,3 +20,14 @@ test('persisted history preserves the selected playback line for direct source r
   data.set('play_history', JSON.stringify([{ sourceKey: 'old', vodId: '1', episode: 0 }]));
   assert.equal(store.getProgress('old', '1').lineIndex, 0);
 });
+test('compensation belongs to its source and title history record and survives ordinary progress updates',()=>{
+ data.clear();const store=HistoryStore.shared();
+ const record=(sourceKey,vodId,gain)=>({sourceKey,vodId,name:'影片',sourceName:'源',episode:0,positionMs:5000,durationMs:60000,updatedAt:1,...(gain===undefined?{}:{loudnessGainDb:gain})});
+ store.saveProgress(record('a','1',6));store.saveProgress(record('b','1',0));store.saveProgress(record('a','2',0));
+ store.saveProgress(record('a','1'));
+ assert.equal(store.getProgress('a','1').loudnessGainDb,6);
+ assert.equal(store.getProgress('b','1').loudnessGainDb,0);assert.equal(store.getProgress('a','2').loudnessGainDb,0);
+ store.saveProgress(record('a','1',0));assert.equal(store.getProgress('a','1').loudnessGainDb,0);
+ store.saveProgress(record('a','2',999));assert.equal(store.getProgress('a','2').loudnessGainDb,0);
+ store.clearHistory();assert.equal(store.getProgress('a','1'),null);
+});
