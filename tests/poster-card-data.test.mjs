@@ -64,16 +64,16 @@ test('cache roundtrip keeps stable fields and discards every score and short-com
   assert.equal(Data.restore(JSON.stringify(Data.empty('35588177')), '35588177').shortComments, -1);
 });
 test('footer follows the first region with muted colours and defaults to grey for unknown regions', () => {
-  assert.equal(Data.footerColor(['中国大陆']), '#49363B');
-  assert.equal(Data.footerColor(['韩国']), '#334751');
-  assert.equal(Data.footerColor(['日本']), '#4C3C46');
+  assert.equal(Data.footerColor(['中国大陆']), '#61383B');
+  assert.equal(Data.footerColor(['韩国']), '#3C5964');
+  assert.equal(Data.footerColor(['日本']), '#695265');
   assert.equal(Data.footerColor(['韩国','日本']), Data.footerColor(['韩国']));
   assert.equal(Data.footerColor(['未知地区']), '#363940');
   assert.equal(Data.footerColor([]), '#363940');
   for (const region of ['中国大陆','韩国','日本','美国','英国','法国','德国','印度','巴西']) {
     const c=Data.footerColor([region]).slice(1).match(/../g).map(v=>parseInt(v,16));
-    assert.ok(Math.max(...c)<=81);
-    assert.ok((Math.max(...c)-Math.min(...c))/Math.max(...c)<0.4);
+    assert.ok(Math.max(...c)<=110);
+    assert.ok((Math.max(...c)-Math.min(...c))/Math.max(...c)<0.5);
   }
 });
 test('the public abstract supplies stable fields without reusing its score or inventing heat', () => {

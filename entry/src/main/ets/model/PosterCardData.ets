@@ -173,16 +173,16 @@ export class PosterCardData {
   /** The first listed production region tints the separate footer with a quiet dark colour. */
   static footerColor(countries: string[]): string {
     const colors: Record<string, string> = {
-      'cn': '#49363B', 'hk': '#49363B', 'mo': '#49363B', 'tw': '#3F3A4A',
-      'kr': '#334751', 'jp': '#4C3C46', 'us': '#353E50', 'gb': '#3D3C4D',
-      'fr': '#3D4050', 'de': '#484238', 'it': '#35473E', 'es': '#494136',
-      'ca': '#4A383B', 'au': '#35434D', 'in': '#494032', 'th': '#443C4B',
-      'ru': '#3B4050', 'se': '#3A454C', 'no': '#493940', 'dk': '#493A3D',
-      'fi': '#3A4650', 'nl': '#4B3D34', 'be': '#484335', 'ch': '#49383D',
-      'at': '#493C40', 'nz': '#35454B', 'br': '#3D4738', 'mx': '#3B483F',
-      'ar': '#3A4850', 'za': '#38483F', 'ir': '#41463D', 'tr': '#49383E',
-      'sg': '#493D40', 'my': '#424137', 'id': '#493C3D', 'ph': '#3C4050',
-      'vn': '#494036'
+      'cn': '#61383B', 'hk': '#61383B', 'mo': '#61383B', 'tw': '#554767',
+      'kr': '#3C5964', 'jp': '#695265', 'us': '#385267', 'gb': '#51446A',
+      'fr': '#3F4F69', 'de': '#5D523E', 'it': '#3D5B4D', 'es': '#64503D',
+      'ca': '#63444B', 'au': '#3B5661', 'in': '#65513D', 'th': '#51435F',
+      'ru': '#444F66', 'se': '#3E5863', 'no': '#61464F', 'dk': '#61434A',
+      'fi': '#405969', 'nl': '#664C3D', 'be': '#5F553E', 'ch': '#65434B',
+      'at': '#60474C', 'nz': '#3B5860', 'br': '#4A5D3F', 'mx': '#3F5E4E',
+      'ar': '#45616A', 'za': '#405D50', 'ir': '#505C43', 'tr': '#62414C',
+      'sg': '#62494E', 'my': '#59533D', 'id': '#63494B', 'ph': '#484F68',
+      'vn': '#63523D'
     };
     const code = countries.length > 0 ? PosterCardData.regionCode(countries[0]) : '';
     return colors[code] !== undefined ? colors[code] : '#363940';

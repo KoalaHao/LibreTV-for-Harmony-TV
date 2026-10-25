@@ -6,7 +6,7 @@
 
 ## 当前版本
 
-`1.10.0-tv.14`，最低 / 目标 API 24（HarmonyOS 6.1.1），使用 API 26 SDK 编译。保留包名 `com.libretv.harmonyos`；覆盖安装仍要求相同签名及有效的设备授权。
+`1.10.0-tv.15`，最低 / 目标 API 24（HarmonyOS 6.1.1），使用 API 26 SDK 编译。保留包名 `com.libretv.harmonyos`；覆盖安装仍要求相同签名及有效的设备授权。
 
 当前版已通过 release 构建和 53 项本地逻辑测试。既有主页、年代筛选、原生视频输出与超分链路已有 Mate TV / API 24 实机记录；新卡片的电影 / 剧集底栏、地区配色、韩国旗与限流摘要兜底已有实机截图；完整热度动效矩阵仍待验证，见 [实机记录](docs/tv-validation.md)。
 

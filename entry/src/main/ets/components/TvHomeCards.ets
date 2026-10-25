@@ -1,5 +1,5 @@
 import { NetImage } from './NetImage';
-import { TV_FOCUS } from '../common/TvFocus';
+import { TV_FOCUS, TV_POSTER_FOCUS } from '../common/TvFocus';
 import { PosterCardData, PosterCardInfo } from '../model/PosterCardData';
 import { PosterMetadataService } from '../data/PosterMetadataService';
 import { CountryFlags } from './CountryFlags';
@@ -80,6 +80,8 @@ export struct TvPosterCard {
   @State private info: PosterCardInfo = PosterCardData.empty();
   @State private infoKnown: boolean = false;
   @State private liveKnown: boolean = false;
+  @State private cardWidth: number = 0;
+  @State private cardHeight: number = 0;
   private alive: boolean = false;
   private requesting: boolean = false;
   private requestToken: number = 0;
@@ -160,8 +162,9 @@ export struct TvPosterCard {
 
   @Builder
   private cardOutline() {
-    Column().width('100%').height('100%').borderRadius(24)
-      .border({ width: 2, color: this.hovered ? '#F0F2F6' : Color.Transparent })
+    Column().width(this.cardWidth).height(this.cardHeight).borderRadius(24)
+      .border({ width: this.focused ? 3 : 2,
+        color: this.focused ? '#FFD18C' : (this.hovered ? '#F0F2F6' : Color.Transparent) })
       .hitTestBehavior(HitTestMode.None)
   }
 
@@ -220,7 +223,13 @@ export struct TvPosterCard {
     }
     .width('100%').borderRadius(24)
     .overlay(this.cardOutline(), { align: Alignment.Center })
-    .focusable(true).focusBox(TV_FOCUS)
+    .onAreaChange((oldArea: Area, newArea: Area) => {
+      const width = Number(newArea.width);
+      const height = Number(newArea.height);
+      if (width > 0 && Math.abs(width - this.cardWidth) > 0.1) this.cardWidth = width;
+      if (height > 0 && Math.abs(height - this.cardHeight) > 0.1) this.cardHeight = height;
+    })
+    .focusable(true).focusBox(TV_POSTER_FOCUS)
     .accessibilityText(this.accessibleInfo())
     .onHover((hovered: boolean) => { this.hovered = hovered; })
     .onFocus(() => { this.focused = true; })

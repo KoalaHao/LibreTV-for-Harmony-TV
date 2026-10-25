@@ -19,6 +19,10 @@ export struct PosterHeat {
   build() {
     Stack() {
       if (this.tier() > 0) {
+        Image($r('app.media.heat_shadow')).width(this.flameSize()).height(this.flameSize() + 3)
+          .objectFit(ImageFit.Contain)
+          .scale({ x: 1.25, y: 1.25 }).blur(5)
+          .shadow({ radius: 10, color: '#FF000000', offsetX: 0, offsetY: 2 })
         Image(this.icon()).width(this.flameSize()).height(this.flameSize() + 3)
           .objectFit(ImageFit.Contain)
           .shadow({ radius: this.tier() >= 3 ? 5 : 0,
