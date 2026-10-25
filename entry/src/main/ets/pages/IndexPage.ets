@@ -1673,6 +1673,7 @@ struct IndexPage {
                 GridItem() {
                   TvPosterCard({ title: item.title, poster: item.cover,
                     rating: item.rating !== undefined ? item.rating : '',
+                    subjectId: item.metadataProvider === 'douban' ? item.id : '', seriesHint: item.isTv,
                     onOpen: () => this.openRecommend(item) })
                 }
               }, (item: RecommendItem) => item.id)

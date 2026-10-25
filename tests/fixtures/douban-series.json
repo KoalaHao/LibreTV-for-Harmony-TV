@@ -1,0 +1,31 @@
+{
+  "id": "35588177",
+  "type": "tv",
+  "subtype": "tv",
+  "is_tv": true,
+  "title": "漫长的季节",
+  "rating": {
+    "count": 1203741,
+    "max": 10,
+    "star_count": 4.5,
+    "value": 9.4
+  },
+  "genres": [
+    "剧情",
+    "家庭",
+    "犯罪"
+  ],
+  "countries": [
+    "中国大陆"
+  ],
+  "durations": [
+    "60分钟"
+  ],
+  "pubdate": [
+    "2023-04-22(中国大陆)"
+  ],
+  "year": "2023",
+  "episodes_count": 12,
+  "comment_count": 412356,
+  "review_count": 5036
+}

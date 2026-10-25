@@ -1,5 +1,9 @@
 import { NetImage } from './NetImage';
 import { TV_FOCUS } from '../common/TvFocus';
+import { PosterCardData, PosterCardInfo } from '../model/PosterCardData';
+import { PosterMetadataService } from '../data/PosterMetadataService';
+import { CountryFlags } from './CountryFlags';
+import { PosterHeat } from './PosterHeat';
 
 /** Living-room controls share a visible hover/focus ring without moving adjacent content. */
 @Component
@@ -61,40 +65,161 @@ export struct TvContinueCard {
   }
 }
 
-/** Round poster tiles keep the title inside a soft glass scrim over the artwork. */
+/** Poster text sits directly on the artwork with soft dark shadows. */
 @Component
 export struct TvPosterCard {
+  @Prop @Watch('subjectChanged') subjectId: string = '';
+  @Prop seriesHint: boolean = false;
   @Prop title: string = '';
   @Prop poster: string = '';
   @Prop rating: string = '';
   onOpen: () => void = () => {};
   @State private hovered: boolean = false;
+  @State private focused: boolean = false;
+  @State private visible: boolean = false;
+  @State private info: PosterCardInfo = PosterCardData.empty();
+  @State private infoKnown: boolean = false;
+  @State private liveKnown: boolean = false;
+  private alive: boolean = false;
+  private requesting: boolean = false;
+  private requestToken: number = 0;
+  private loadedVisible: boolean = false;
+
+  aboutToAppear(): void {
+    this.alive = true;
+    this.subjectChanged();
+  }
+
+  aboutToDisappear(): void {
+    this.alive = false;
+    this.requestToken++;
+    this.visible = false;
+  }
+
+  private subjectChanged(): void {
+    this.requestToken++;
+    this.requesting = false;
+    this.loadedVisible = false;
+    this.liveKnown = false;
+    const cached = PosterMetadataService.peek(this.subjectId);
+    this.info = cached !== null ? cached : PosterCardData.empty(this.subjectId, this.seriesHint);
+    this.infoKnown = cached !== null;
+    if (this.visible) this.loadDetails();
+  }
+
+  private async loadDetails(): Promise<void> {
+    if (!this.alive || !this.visible || this.subjectId === '' || this.requesting || this.loadedVisible) return;
+    const id = this.subjectId;
+    const token = ++this.requestToken;
+    this.requesting = true;
+    this.loadedVisible = true;
+    try {
+      const result = await PosterMetadataService.request(id, this.seriesHint);
+      if (this.alive && this.requestToken === token && this.subjectId === id && result !== null) {
+        this.info = result;
+        this.infoKnown = true;
+        this.liveKnown = result.liveMetadata;
+      }
+    } finally {
+      if (this.requestToken === token) this.requesting = false;
+    }
+  }
+
+  private score(): string {
+    if (this.liveKnown) return this.info.rating !== '' ? this.info.rating : '暂无评分';
+    const value = Number(this.rating);
+    if (Number.isFinite(value) && value > 0 && value <= 10) return value.toFixed(1);
+    return '暂无评分';
+  }
+
+  private footerRight(): string {
+    return this.infoKnown ? PosterCardData.footerRight(this.info) : (this.seriesHint ? '剧集' : '—');
+  }
+
+  private accessibleInfo(): string {
+    return this.title + '，豆瓣评分' + this.score() + '，' + this.info.countries.join(' / ') + '，' +
+      this.info.genres.join(' / ') + '，' + this.info.releaseDate + '，' + this.footerRight() + '，' +
+      PosterCardData.heatLabel(this.info.shortComments);
+  }
+
+  @Builder
+  private cardOutline() {
+    Column().width('100%').height('100%').borderRadius(24)
+      .border({ width: 2, color: this.hovered ? '#F0F2F6' : Color.Transparent })
+      .hitTestBehavior(HitTestMode.None)
+  }
 
   build() {
-    Stack({ alignContent: Alignment.Bottom }) {
-      Stack({ alignContent: Alignment.TopEnd }) {
+    Column({ space: 0 }) {
+      Stack({ alignContent: Alignment.Bottom }) {
+        Stack({ alignContent: Alignment.TopStart }) {
         NetImage({ url: this.poster, boxWidth: 600, boxHeight: 900 }).width('100%').height('100%')
-        if (this.rating !== '' && this.rating !== '0') {
-          Text(this.rating).fontSize(14).fontWeight(FontWeight.Bold).fontColor('#FFE0A0')
-            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-            .backgroundColor('#CC11151D').borderRadius(7).margin(9)
+        Text(this.score() === '暂无评分' ? this.score() : '★ ' + this.score())
+          .fontSize(this.score() === '暂无评分' ? 10 : 14).fontWeight(FontWeight.Bold)
+          .fontColor(this.score() === '暂无评分' ? '#C1C9D5' : '#FFE0A0')
+          .padding({ left: 9, right: 9, top: 5, bottom: 5 })
+          .backgroundColor('#B81A1E27').borderRadius(14).margin(10)
+      }
+        .width('100%').height('100%')
+        Column({ space: 0 }) {
+        Row({ space: 5 }) {
+          if (PosterCardData.heatTier(this.info.shortComments) > 0) {
+            PosterHeat({ comments: this.info.shortComments, active: this.visible && (this.hovered || this.focused) })
+          }
+          Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor('#FFFFFF')
+            .textShadow([{ radius: 3, color: '#FF000000', offsetX: 0, offsetY: 1 },
+              { radius: 10, color: '#FF000000', offsetX: -3, offsetY: 2 },
+              { radius: 10, color: '#FF000000', offsetX: 3, offsetY: 2 },
+              { radius: 24, color: '#FF000000', offsetX: -4, offsetY: 0 },
+              { radius: 24, color: '#FF000000', offsetX: 4, offsetY: 0 },
+              { radius: 48, color: '#FF000000', offsetX: 0, offsetY: 4 },
+              { radius: 48, color: '#FF000000', offsetX: 0, offsetY: 4 }])
+            .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        }.width('100%').padding({ left: 11, right: 11, top: 13 })
+        Text(this.info.genres.length > 0 ? this.info.genres.slice(0, 3).join(' / ') : '类型未提供')
+          .fontSize(11).fontColor('#E2E6ED').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textShadow([{ radius: 2, color: '#FF000000', offsetX: 0, offsetY: 1 },
+            { radius: 8, color: '#FF000000', offsetX: -2, offsetY: 1 },
+            { radius: 8, color: '#FF000000', offsetX: 2, offsetY: 1 },
+            { radius: 20, color: '#FF000000', offsetX: -3, offsetY: 0 },
+            { radius: 20, color: '#FF000000', offsetX: 3, offsetY: 0 },
+            { radius: 36, color: '#FF000000', offsetX: 0, offsetY: 3 },
+            { radius: 36, color: '#FF000000', offsetX: 0, offsetY: 3 }])
+          .width('100%').padding({ left: 13, right: 13, top: 6, bottom: 10 })
+        }.width('100%')
+      }.width('100%').aspectRatio(0.72)
+        .borderRadius({ topLeft: 24, topRight: 24 }).clip(true)
+      Row({ space: 3 }) {
+          Text(this.info.releaseDate !== '' ? this.info.releaseDate : '—')
+            .fontSize(this.info.countries.length > 1 ? 9.5 : 10.5).fontColor('#E2E6ED')
+            .maxLines(1).layoutWeight(1).textAlign(TextAlign.Start)
+          CountryFlags({ countries: this.info.countries, focused: this.focused })
+          Text(this.footerRight()).fontSize(11).fontColor('#E2E6ED')
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1).textAlign(TextAlign.End)
         }
-      }
-      .width('100%').height('100%')
-      Column() {
-        Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor('#FFFFFF')
-          .textShadow({ radius: 8, color: '#E6000000', offsetX: 0, offsetY: 2 })
-          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
-      }
-      .width('100%').padding({ left: 13, right: 13, top: 14, bottom: 14 })
-      .backgroundEffect({ radius: 12, saturation: 1.1 })
-      .linearGradient({ direction: GradientDirection.Bottom, colors: [['#4810151C', 0], ['#E610151C', 1]] })
+        .width('100%').padding({ left: 10, right: 10, top: 7, bottom: 7 })
+        .backgroundColor(PosterCardData.footerColor(this.info.countries))
+        .border({ width: { top: 0.5 }, color: '#28FFFFFF' })
+        .borderRadius({ bottomLeft: 24, bottomRight: 24 }).clip(true)
     }
-    .width('100%').aspectRatio(0.72).borderRadius(22).clip(true)
-    .border({ width: 2, color: this.hovered ? '#F0F2F6' : Color.Transparent })
+    .width('100%').borderRadius(24)
+    .overlay(this.cardOutline(), { align: Alignment.Center })
     .focusable(true).focusBox(TV_FOCUS)
-    .accessibilityText(this.title)
+    .accessibilityText(this.accessibleInfo())
     .onHover((hovered: boolean) => { this.hovered = hovered; })
+    .onFocus(() => { this.focused = true; })
+    .onBlur(() => { this.focused = false; })
+    .onVisibleAreaChange([0.01], (visible: boolean, ratio: number) => {
+      this.visible = visible;
+      if (visible) this.loadDetails();
+      else {
+        this.loadedVisible = false;
+        this.liveKnown = false;
+        this.info = PosterCardData.fromStatic(this.info);
+        this.requestToken++;
+        this.requesting = false;
+      }
+    })
     .onClick(() => this.onOpen())
   }
 }

@@ -209,6 +209,7 @@ export interface RecommendItem {
   cover: string;
   rating?: string;
   isTv: boolean;
+  metadataProvider?: string;
 }
 
 export interface Settings {

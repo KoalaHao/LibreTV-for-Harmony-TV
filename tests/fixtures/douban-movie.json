@@ -1,0 +1,30 @@
+{
+  "id": "1292052",
+  "type": "movie",
+  "subtype": "movie",
+  "is_tv": false,
+  "title": "肖申克的救赎",
+  "rating": {
+    "count": 3353278,
+    "max": 10,
+    "star_count": 5.0,
+    "value": 9.7
+  },
+  "genres": [
+    "剧情",
+    "犯罪"
+  ],
+  "countries": [
+    "美国"
+  ],
+  "durations": [
+    "142分钟"
+  ],
+  "pubdate": [
+    "2026-08-28(中国大陆)"
+  ],
+  "year": "1994",
+  "episodes_count": 0,
+  "comment_count": 669007,
+  "review_count": 15018
+}

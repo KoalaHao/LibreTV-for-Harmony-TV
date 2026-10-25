@@ -15,7 +15,7 @@ export class DoubanClient {
       'User-Agent': HttpClient.UA,
       'Referer': 'https://movie.douban.com/',
       'Accept': 'application/json'
-    }, 8000);
+    }, 8000, false);
     if (!res.ok) {
       return [];
     }
@@ -39,7 +39,8 @@ export class DoubanClient {
           title: title,
           cover: cover,
           rating: rate !== '' && rate !== '0' ? rate : undefined,
-          isTv: type === 'tv'
+          isTv: type === 'tv',
+          metadataProvider: 'douban'
         });
       }
       return items;
@@ -100,7 +101,7 @@ export class DoubanClient {
       'User-Agent': HttpClient.UA,
       'Referer': 'https://movie.douban.com/',
       'Accept': 'application/json'
-    }, 8000);
+    }, 8000, false);
     if (!res.ok) {
       return [];
     }
@@ -124,7 +125,8 @@ export class DoubanClient {
           title: title,
           cover: cover,
           rating: rate !== '' && rate !== '0' ? rate : undefined,
-          isTv: tags === '电视剧'
+          isTv: tags === '电视剧',
+          metadataProvider: 'douban'
         });
       }
       return items;
@@ -144,7 +146,7 @@ export class DoubanClient {
       'User-Agent': HttpClient.UA,
       'Referer': 'https://movie.douban.com/',
       'Accept': 'text/html,application/xhtml+xml'
-    }, 10000);
+    }, 10000, false);
     if (!res.ok || res.text === '') {
       return [];
     }
@@ -166,7 +168,8 @@ export class DoubanClient {
         title: titleM[1].trim(),
         cover: imgM[1],
         rating: rate !== '' && rate !== '0' ? rate : undefined,
-        isTv: false
+        isTv: false,
+        metadataProvider: 'douban'
       });
     }
     return items;

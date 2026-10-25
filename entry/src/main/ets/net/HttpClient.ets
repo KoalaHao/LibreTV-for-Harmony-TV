@@ -31,8 +31,9 @@ export class HttpClient {
     };
   }
 
-  static async getText(url: string, headers: Record<string, string> = {}, timeoutMs: number = 10000): Promise<HttpResult> {
-    return await HttpClient.get(url, headers, timeoutMs, false);
+  static async getText(url: string, headers: Record<string, string> = {}, timeoutMs: number = 10000,
+    usingCache: boolean = true): Promise<HttpResult> {
+    return await HttpClient.get(url, headers, timeoutMs, false, usingCache);
   }
 
   /**
@@ -121,11 +122,13 @@ export class HttpClient {
     return await HttpClient.get(url, headers, timeoutMs, true);
   }
 
-  private static async get(url: string, headers: Record<string, string>, timeoutMs: number, binary: boolean): Promise<HttpResult> {
+  private static async get(url: string, headers: Record<string, string>, timeoutMs: number, binary: boolean,
+    usingCache: boolean = true): Promise<HttpResult> {
     const httpRequest = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
         method: http.RequestMethod.GET,
+        usingCache: usingCache,
         header: headers,
         connectTimeout: timeoutMs,
         readTimeout: timeoutMs,
