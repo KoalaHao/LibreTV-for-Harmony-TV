@@ -2,6 +2,8 @@
  * 设置页：广告过滤 / 自动连播 / 成人过滤 / 主题 / 推荐源 / 默认倍速 / 播放历史开关
  */
 
+import { DevicePolicy } from '../common/DevicePolicy';
+import { BackNavigation } from '../common/BackNavigation';
 import { Settings } from '../model/Types';
 import { SettingsStore } from '../data/SettingsStore';
 import { SourceManager } from '../data/SourceManager';
@@ -25,6 +27,7 @@ export struct SettingsPage {
   @State adultFilter: boolean = SettingsStore.shared().get().adultFilter;
   @State themeMode: string = SettingsStore.shared().get().themeMode;
   @State recommendSource: string = SettingsStore.shared().get().recommendSource;
+  @State superResolution: boolean = SettingsStore.shared().get().superResolution;
   @State defaultSpeed: number = SettingsStore.shared().get().defaultSpeed;
   @State playHistoryEnabled: boolean = SettingsStore.shared().get().playHistoryEnabled;
   @State autoDiscover: boolean = SettingsStore.shared().get().autoDiscover;
@@ -88,6 +91,14 @@ export struct SettingsPage {
     }
   }
 
+  private handleBack(): void {
+    if (this.activePanel !== '') {
+      this.activePanel = '';
+      return;
+    }
+    this.navPathStack.pop();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Top }) {
@@ -129,6 +140,22 @@ export struct SettingsPage {
                   this.save({ autoNext: this.autoNext });
                 }
               })
+
+              if (DevicePolicy.isTV()) {
+                SettingsRow({
+                  rowTitle: '视频超分（支持时启用）',
+                  rowValue: this.superResolution ? '开' : '关',
+                  rowShowArrow: false,
+                  onRowClick: () => {
+                    this.superResolution = !this.superResolution;
+                    this.save({ superResolution: this.superResolution });
+                  }
+                })
+                Text('当前是否生效请看播放页状态；运动流畅度（MEMC）请在电视系统图像设置中调整。')
+                  .fontSize(13)
+                  .fontColor($r('app.color.color_text_secondary'))
+                  .padding({ left: 16, right: 16, top: 8, bottom: 12 })
+              }
 
               SettingsRow({
                 rowTitle: '默认倍速',
@@ -275,7 +302,7 @@ export struct SettingsPage {
             .height(40)
             .justifyContent(FlexAlign.Center)
             .onClick(() => {
-              this.navPathStack.pop();
+              this.handleBack();
             })
             Text('设置')
               .fontSize(17)
@@ -294,6 +321,13 @@ export struct SettingsPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
+    .onShown(() => {
+      BackNavigation.register('Settings', () => this.handleBack());
+    })
   }
 
   @Builder

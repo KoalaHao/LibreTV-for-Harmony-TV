@@ -2,6 +2,10 @@
  * 播放页：全屏播放（点播 / 离线缓存）、进度续播、倍速、选集、换源、自动连播
  */
 
+import { TvLayout } from '../common/TvLayout';
+import { KeyCode } from '@kit.InputKit';
+import { TV_FOCUS } from '../common/TvFocus';
+import { BackNavigation } from '../common/BackNavigation';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { window, PiPWindow } from '@kit.ArkUI';
 import { AvPlayerController, PlaybackSpeedOption } from '../player/AvPlayerController';
@@ -107,6 +111,7 @@ export struct PlayerPage {
   @State controlsVisible: boolean = true;
   /** 点播收藏态：顶部栏星标按钮的实/空心 */
   @State favorite: boolean = false;
+  @State superResolutionState: string = 'off';
   @State showEpisodes: boolean = false;
   @State showSpeeds: boolean = false;
   @State showSources: boolean = false;
@@ -130,6 +135,9 @@ export struct PlayerPage {
   private volumeMaxLevel: number = 15;
   /** 投屏用的媒体会话：系统投屏列表只认有 AVSession 的应用 */
   private castSession: avSession.AVSession | null = null;
+  private lastSessionSyncAt: number = 0;
+  private castGeneration: number = 0;
+  private pendingCastGeneration: number = -1;
   /** 是否已经真正起播过（用于区分「首次加载」和「播放中抖动」） */
   @State hasStarted: boolean = false;
   /** 真正控制加载圈显隐，和 buffering 解耦，防止闪一下就没 */
@@ -434,6 +442,7 @@ export struct PlayerPage {
     // release() 里把常亮、投播会话、前后台回调都交还了，重新进入必须再拿回来
     this.holdScreen();
     this.settings = SettingsStore.shared().get();
+    this.player.configureSuperResolution(DevicePolicy.isTV() && this.settings.superResolution);
     this.speedValue = this.settings.defaultSpeed;
     this.syncSystemVolume();
     this.initCastSession();
@@ -480,6 +489,10 @@ export struct PlayerPage {
   }
 
   private bindCallbacks(): void {
+    this.player.onSuperResolutionState = (state: string) => {
+      this.superResolutionState = state;
+    };
+    this.player.configureSuperResolution(DevicePolicy.isTV() && this.settings.superResolution);
     this.player.onPrepared = (durationMs: number) => {
       this.durationMs = durationMs;
       this.durationText = Utils.formatTime(durationMs);
@@ -511,6 +524,8 @@ export struct PlayerPage {
         this.sliderValue = Math.floor(positionMs / 1000);
       }
       this.maybeSaveProgress(positionMs, durationMs);
+      // Refresh the session anchor after seeks and at a modest rate while playing.
+      if (Date.now() - this.lastSessionSyncAt >= 5000) this.syncCastPlayback(this.playing);
     };
     this.player.onPlayStateChanged = (playing: boolean) => {
       this.playing = playing;
@@ -1120,7 +1135,7 @@ export struct PlayerPage {
       clearTimeout(this.hideTimer);
     }
     this.hideTimer = setTimeout(() => {
-      if (this.playing) {
+      if (this.playing && !this.showEpisodes && !this.showSpeeds && !this.showSources) {
         this.controlsVisible = false;
       }
     }, 4000);
@@ -1477,16 +1492,33 @@ export struct PlayerPage {
 
   /** 建立投屏会话：AVCastPicker 只对创建了 AVSession 的应用展示可投设备 */
   private async initCastSession(): Promise<void> {
-    if (this.castSession !== null) {
+    if (this.castSession !== null || this.pendingCastGeneration === this.castGeneration) {
       return;
     }
     const ctx = this.getUIContext().getHostContext();
     if (ctx === undefined) {
       return;
     }
+    const generation = this.castGeneration;
+    this.pendingCastGeneration = generation;
+    let created: avSession.AVSession | null = null;
     try {
       const s = await avSession.createAVSession(ctx, 'libretv_player', 'video');
+      created = s;
+      if (this.released || generation !== this.castGeneration) {
+        await s.destroy();
+        return;
+      }
       this.castSession = s;
+      s.on('play', () => { if (!this.released) this.player.play(); });
+      s.on('pause', () => { if (!this.released) this.player.pause(); });
+      s.on('seek', (time: number) => { if (!this.released) this.seekFromRemote(time); });
+      s.on('playNext', () => {
+        if (!this.released && this.currentEp + 1 < this.episodes.length) this.selectEpisode(this.currentEp + 1);
+      });
+      s.on('playPrevious', () => {
+        if (!this.released && this.currentEp > 0) this.selectEpisode(this.currentEp - 1);
+      });
       await s.activate();
       const md: avSession.AVMetadata = {
         assetId: this.vodId !== '' ? this.vodId : 'unknown',
@@ -1497,12 +1529,17 @@ export struct PlayerPage {
       // 不声明时系统按普通音频会话处理，列表只剩音频输出设备（本次反馈的现象）
       const extras: Record<string, Object> = { 'requireAbilityList': ['url-cast'] };
       await s.setExtras(extras);
+      this.syncCastPlayback(this.playing);
     } catch (e) {
-      this.castSession = null;
+      if (generation === this.castGeneration) this.castSession = null;
+      if (created !== null) created.destroy().catch(() => {});
+    } finally {
+      if (this.pendingCastGeneration === generation) this.pendingCastGeneration = -1;
     }
   }
 
   private releaseCastSession(): void {
+    this.castGeneration++;
     const s = this.castSession;
     this.castSession = null;
     if (s !== null) {
@@ -1518,12 +1555,21 @@ export struct PlayerPage {
     if (s === null) {
       return;
     }
+    this.lastSessionSyncAt = Date.now();
     try {
+      const md: avSession.AVMetadata = {
+        assetId: this.vodId + ':' + this.currentEp.toString(),
+        title: this.title !== '' ? this.title : Brand.displayName(this.getUIContext()),
+        subtitle: this.episodeName,
+        duration: this.durationMs
+      };
+      s.setAVMetadata(md).catch(() => {});
       const pos: avSession.PlaybackPosition = { elapsedTime: this.positionMs, updateTime: Date.now() };
       const st: avSession.AVPlaybackState = {
         state: playing ? avSession.PlaybackState.PLAYBACK_STATE_PLAY
           : avSession.PlaybackState.PLAYBACK_STATE_PAUSE,
-        position: pos
+        position: pos,
+        speed: this.speedValue
       };
       s.setAVPlaybackState(st).catch(() => {
         // 忽略
@@ -1768,6 +1814,52 @@ export struct PlayerPage {
     this.navPathStack.pop();
   }
 
+  private seekFromRemote(position: number): void {
+    if (this.durationMs <= 0 || !Number.isFinite(position)) return;
+    const target = Math.max(0, Math.min(this.durationMs, position));
+    this.player.seekTo(target);
+    this.applySeekUi(target);
+    this.syncCastPlayback(this.playing);
+  }
+
+  private handleRemoteKey(event: KeyEvent): void {
+    if (!DevicePolicy.isTV() || event.type !== KeyType.Down || this.released) return;
+    const code = event.keyCode;
+    let handled = true;
+    if (code === KeyCode.KEYCODE_MEDIA_PLAY_PAUSE) this.togglePlay();
+    else if (code === KeyCode.KEYCODE_MEDIA_PLAY) this.player.play();
+    else if (code === KeyCode.KEYCODE_MEDIA_PAUSE) this.player.pause();
+    else if (!this.controlsVisible && !this.showEpisodes && !this.showSpeeds && !this.showSources) {
+      if (code === KeyCode.KEYCODE_DPAD_LEFT) this.seekFromRemote(this.positionMs - 10000);
+      else if (code === KeyCode.KEYCODE_DPAD_RIGHT) this.seekFromRemote(this.positionMs + 10000);
+      else if (code === KeyCode.KEYCODE_DPAD_CENTER || code === KeyCode.KEYCODE_ENTER) this.togglePlay();
+      else if (code === KeyCode.KEYCODE_DPAD_UP || code === KeyCode.KEYCODE_DPAD_DOWN) this.controlsVisible = true;
+      else handled = false;
+    } else handled = false;
+    if (handled) event.stopPropagation();
+    if (this.controlsVisible) this.scheduleHideControls();
+  }
+
+  private superResolutionLabel(): string {
+    if (this.superResolutionState === 'active') return '视频超分：生效中';
+    if (this.superResolutionState === 'requesting') return '视频超分：等待系统确认';
+    if (this.superResolutionState === 'unavailable') return '视频超分：设备暂不支持';
+    if (this.superResolutionState === 'inactive') return '视频超分：当前未生效';
+    return '视频超分：已关闭';
+  }
+
+  private handleBack(): void {
+    if (this.showEpisodes || this.showSpeeds || this.showSources) {
+      this.showEpisodes = false;
+      this.showSpeeds = false;
+      this.showSources = false;
+      this.controlsVisible = true;
+      this.scheduleHideControls();
+      return;
+    }
+    this.back();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Center }) {
@@ -1796,6 +1888,8 @@ export struct PlayerPage {
           .onTouch((event: TouchEvent) => {
             this.handlePressTouch(event);
           })
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             // 长按后抬手不该顺带把控制条呼出来
             if (this.suppressTap) {
@@ -1870,12 +1964,16 @@ export struct PlayerPage {
                 .fontSize(14)
                 .fontColor(Color.White)
                 .backgroundColor('#40FFFFFF')
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.back();
                 })
               Button('重试')
                 .fontSize(14)
                 .backgroundColor($r('app.color.color_primary'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.errorText = '';
                   this.startPlay();
@@ -1907,6 +2005,8 @@ export struct PlayerPage {
               .height(34)
               .borderRadius(17)
               .backgroundColor($r('app.color.color_player_scrim'))
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 this.back();
               })
@@ -1930,6 +2030,13 @@ export struct PlayerPage {
               }
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
+              if (DevicePolicy.isTV()) {
+                Text(this.superResolutionLabel())
+                  .fontSize(14)
+                  .fontColor('#DDDDDD')
+                  .maxLines(1)
+                  .margin({ right: 16 })
+              }
               // 收藏星标：点播播放页内即可收藏/取消，与详情页、直播页同款。
               Stack({ alignContent: Alignment.Center }) {
                 Image(this.favorite ? $r('app.media.ic_player_star_filled') : $r('app.media.ic_player_star'))
@@ -1941,6 +2048,8 @@ export struct PlayerPage {
               .height(34)
               .borderRadius(17)
               .backgroundColor($r('app.color.color_player_scrim'))
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 this.toggleFav();
               })
@@ -1955,6 +2064,8 @@ export struct PlayerPage {
               .height(34)
               .borderRadius(17)
               .backgroundColor($r('app.color.color_player_scrim'))
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 this.shareMovie();
               })
@@ -1969,6 +2080,8 @@ export struct PlayerPage {
               .height(34)
               .borderRadius(17)
               .backgroundColor($r('app.color.color_player_scrim'))
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 // 横屏 -> 竖屏（退出全屏）；竖屏 -> 横屏（重新全屏）
                 // 画面会随容器尺寸重新等比计算并居中，不会拉伸
@@ -2002,6 +2115,8 @@ export struct PlayerPage {
                 .height(62)
                 .borderRadius(31)
                 .backgroundColor($r('app.color.color_player_scrim'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.togglePlay();
                 })
@@ -2017,6 +2132,8 @@ export struct PlayerPage {
                 .height(62)
                 .borderRadius(31)
                 .backgroundColor($r('app.color.color_player_scrim'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.togglePlay();
                 })
@@ -2071,6 +2188,8 @@ export struct PlayerPage {
                     .padding({ left: 11, right: 11 })
                     .textAlign(TextAlign.Center)
                     .maxLines(1)
+                    .focusable(true)
+                    .focusBox(TV_FOCUS)
                     .onClick(() => {
                       this.showSpeeds = !this.showSpeeds;
                     })
@@ -2084,6 +2203,8 @@ export struct PlayerPage {
                       .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
+                      .focusable(true)
+                      .focusBox(TV_FOCUS)
                       .onClick(() => {
                         this.showEpisodes = !this.showEpisodes;
                       })
@@ -2098,6 +2219,8 @@ export struct PlayerPage {
                       .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
+                      .focusable(true)
+                      .focusBox(TV_FOCUS)
                       .onClick(() => {
                         this.selectEpisode(this.currentEp + 1);
                       })
@@ -2131,6 +2254,8 @@ export struct PlayerPage {
                       .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
+                      .focusable(true)
+                      .focusBox(TV_FOCUS)
                       .onClick(() => {
                         this.fitCover = !this.fitCover;
                         this.updateSurfaceSize();
@@ -2146,6 +2271,8 @@ export struct PlayerPage {
                       .padding({ left: 11, right: 11 })
                       .textAlign(TextAlign.Center)
                       .maxLines(1)
+                      .focusable(true)
+                      .focusBox(TV_FOCUS)
                       .onClick(() => {
                         this.runSpeedTest();
                       })
@@ -2234,8 +2361,10 @@ export struct PlayerPage {
                 .fontColor($r('app.color.color_text'))
                 .layoutWeight(1)
               Text('关闭')
-                .fontSize(13)
+                .fontSize(TvLayout.isLandscape(this.canvasW, this.canvasH) ? 16 : 13)
                 .fontColor($r('app.color.color_primary'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.showEpisodes = false;
                 })
@@ -2245,26 +2374,28 @@ export struct PlayerPage {
               ForEach(this.episodes, (ep: Episode) => {
                 GridItem() {
                   Text(ep.name)
-                    .fontSize(13)
+                    .fontSize(TvLayout.isLandscape(this.canvasW, this.canvasH) ? 16 : 13)
                     .fontColor(this.epTextColor(ep))
                     .backgroundColor(this.epBgColor(ep))
                     .borderRadius(8)
-                    .height(36)
+                    .height(TvLayout.isLandscape(this.canvasW, this.canvasH) ? 48 : 36)
                     .width('100%')
                     .textAlign(TextAlign.Center)
                     .maxLines(1)
+                    .focusable(true)
+                    .focusBox(TV_FOCUS)
                     .onClick(() => {
                       this.selectEpisode(ep.index);
                     })
                 }
               }, (ep: Episode) => 'ep_' + ep.index.toString())
             }
-            .columnsTemplate('1fr 1fr 1fr 1fr')
+            .columnsTemplate(TvLayout.columns(this.canvasW - 64, this.canvasW > this.canvasH ? 140 : 84, 8))
             .columnsGap(8)
             .rowsGap(8)
           }
             .width('100%')
-            .height(260)
+            .height(TvLayout.isLandscape(this.canvasW, this.canvasH) ? Math.min(400, this.canvasH * 0.6) : 260)
             .padding(16)
             .backgroundColor($r('app.color.color_card'))
             .borderRadius({ topLeft: 16, topRight: 16 })
@@ -2288,6 +2419,8 @@ export struct PlayerPage {
                 .backgroundColor(this.speedBgColor(opt))
                 .borderRadius(16)
                 .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.selectSpeed(opt.value);
                 })
@@ -2320,6 +2453,8 @@ export struct PlayerPage {
                 Text('关闭')
                   .fontSize(11)
                   .fontColor($r('app.color.color_primary'))
+                  .focusable(true)
+                  .focusBox(TV_FOCUS)
                   .onClick(() => {
                     this.showSources = false;
                   })
@@ -2371,6 +2506,8 @@ export struct PlayerPage {
                       .padding({ left: 8, right: 8, top: 7, bottom: 7 })
                       .backgroundColor($r('app.color.color_chip_bg'))
                       .borderRadius(6)
+                      .focusable(true)
+                      .focusBox(TV_FOCUS)
                       .onClick(() => {
                         this.switchSource(item);
                       })
@@ -2400,6 +2537,9 @@ export struct PlayerPage {
       .width('100%')
       .height('100%')
       .backgroundColor(Color.Black)
+      .focusable(true)
+      .defaultFocus(DevicePolicy.isTV())
+      .onKeyEvent((event: KeyEvent) => this.handleRemoteKey(event))
       // 记录播放器可视区尺寸：横竖屏切换、分屏、折叠屏都会触发，
       // 每次变化都按视频原始比例重新算一次画面尺寸，保证始终等比且居中。
       .onAreaChange((oldValue: Area, newValue: Area) => {
@@ -2441,10 +2581,11 @@ export struct PlayerPage {
     .hideTitleBar(true)
     .hideBackButton(true)
     .onShown(() => {
+      BackNavigation.register('Player', () => this.handleBack());
       this.onPageShown();
     })
     .onBackPressed(() => {
-      this.back();
+      this.handleBack();
       return true;
     })
   }

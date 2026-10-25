@@ -46,6 +46,9 @@ export class SettingsStore {
     if (patch.defaultSpeed !== undefined) {
       s.defaultSpeed = patch.defaultSpeed;
     }
+    if (patch.superResolution !== undefined) {
+      s.superResolution = patch.superResolution;
+    }
     if (patch.playHistoryEnabled !== undefined) {
       s.playHistoryEnabled = patch.playHistoryEnabled;
     }
@@ -70,6 +73,7 @@ export class SettingsStore {
       if (adFilter !== '') {
         this.settings.adFilter = adFilter;
       }
+      this.settings.superResolution = SettingsStore.bool(rec['superResolution'], this.settings.superResolution);
       this.settings.autoNext = SettingsStore.bool(rec['autoNext'], this.settings.autoNext);
       this.settings.adultFilter = SettingsStore.bool(rec['adultFilter'], this.settings.adultFilter);
       const themeMode = SettingsStore.str(rec['themeMode']);

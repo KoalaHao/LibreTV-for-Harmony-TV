@@ -30,6 +30,15 @@ export class AvPlayerController {
    * 所以自己存一份：滑屏调音量时若还没起播，先记住，prepared 时再补上。
    */
   private volume: number = 1.0;
+  private superResolution: boolean = false;
+  private superResolutionAvailable: boolean = true;
+  onSuperResolutionState: (state: string) => void = () => {};
+
+  configureSuperResolution(enabled: boolean): void {
+    this.superResolution = enabled;
+    this.onSuperResolutionState(enabled ? 'requesting' : 'off');
+  }
+
 
   /** UI 回调（由页面赋值） */
   onPrepared: (durationMs: number) => void = () => {};
@@ -179,8 +188,30 @@ export class AvPlayerController {
     this.prepared = false;
     this.wantPlay = true;
     this.pendingSeekMs = seekMs > 0 ? seekMs : 0;
+    const requestSR = this.superResolution && this.superResolutionAvailable;
+    this.onSuperResolutionState(requestSR ? 'requesting' : (this.superResolution ? 'unavailable' : 'off'));
     const strategy: media.PlaybackStrategy = { preferredBufferDuration: 20 };
-    p.setMediaSource(source, strategy);
+    if (requestSR) strategy.enableSuperResolution = true;
+    try {
+      p.setMediaSource(source, strategy);
+    } catch (e) {
+      const error = e as BusinessError;
+      if (!requestSR || (error.code !== 5410003 && error.code !== 5410004)) {
+        this.onError(AvPlayerController.friendlyError(error.code));
+        return false;
+      }
+      this.superResolutionAvailable = false;
+      this.onSuperResolutionState('unavailable');
+      if (!await this.ensureIdle(p)) {
+        const fresh = await this.recreate(p);
+        if (fresh === null) {
+          this.onError('播放器初始化失败，请重试');
+          return false;
+        }
+        p = fresh;
+      }
+      p.setMediaSource(source, { preferredBufferDuration: 20 });
+    }
     const ready: boolean = await this.waitForState(p, 'initialized', 8000);
     if (!ready) {
       this.onError('视频源初始化超时，请重试或换源');
@@ -221,6 +252,16 @@ export class AvPlayerController {
       return;
     }
     this.eventsBound = true;
+    if (this.superResolution) {
+      try {
+        player.on('superResolutionChanged', (enabled: boolean) => {
+          if (this.player === player) this.onSuperResolutionState(enabled ? 'active' : 'inactive');
+        });
+      } catch (e) {
+        this.superResolutionAvailable = false;
+        this.onSuperResolutionState('unavailable');
+      }
+    }
     player.on('stateChange', (state: media.AVPlayerState) => {
       switch (state) {
         case 'initialized':
@@ -269,6 +310,14 @@ export class AvPlayerController {
       }
     });
     player.on('error', (err: BusinessError) => {
+      if (this.superResolution && (err.code === 5410003 || err.code === 5410004)) {
+        this.superResolutionAvailable = false;
+        this.onSuperResolutionState('unavailable');
+        // A nonfatal algorithm rejection must not hide an otherwise playing video.
+        // If the service also enters error, retain the existing retry path; the next source starts without SR.
+        if (player.state === 'error') this.onError('视频增强不可用，请重试以普通模式播放');
+        return;
+      }
       this.onError(AvPlayerController.friendlyError(err.code));
     });
     player.on('durationUpdate', (duration: number) => {
