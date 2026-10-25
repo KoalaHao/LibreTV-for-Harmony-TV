@@ -6,6 +6,11 @@ export interface PosterStaticInfo {
   releaseDate: string;
   durationMinutes: number;
   totalEpisodes: number;
+  directors: string[];
+  actors: string[];
+  description: string;
+  originalTitle: string;
+  detailsLoaded: boolean;
 }
 
 export interface PosterCardInfo extends PosterStaticInfo {
@@ -21,18 +26,22 @@ export class PosterCardData {
   static stable(info: PosterStaticInfo): PosterStaticInfo {
     return { subjectId: info.subjectId, isSeries: info.isSeries, countries: info.countries.slice(),
       genres: info.genres.slice(), releaseDate: info.releaseDate, durationMinutes: info.durationMinutes,
-      totalEpisodes: info.totalEpisodes };
+      totalEpisodes: info.totalEpisodes, directors: info.directors.slice(), actors: info.actors.slice(),
+      description: info.description, originalTitle: info.originalTitle, detailsLoaded: info.detailsLoaded };
   }
 
   static fromStatic(info: PosterStaticInfo): PosterCardInfo {
     return { subjectId: info.subjectId, isSeries: info.isSeries, countries: info.countries.slice(),
       genres: info.genres.slice(), releaseDate: info.releaseDate, durationMinutes: info.durationMinutes,
-      totalEpisodes: info.totalEpisodes, liveMetadata: false, shortComments: -1, rating: '' };
+      totalEpisodes: info.totalEpisodes, directors: info.directors.slice(), actors: info.actors.slice(),
+      description: info.description, originalTitle: info.originalTitle, detailsLoaded: info.detailsLoaded,
+      liveMetadata: false, shortComments: -1, rating: '' };
   }
 
   static empty(subjectId: string = '', isSeries: boolean = false): PosterCardInfo {
     return { subjectId: subjectId, isSeries: isSeries, countries: [], genres: [], releaseDate: '',
-      durationMinutes: 0, totalEpisodes: 0, liveMetadata: false, shortComments: -1, rating: '' };
+      durationMinutes: 0, totalEpisodes: 0, directors: [], actors: [], description: '', originalTitle: '',
+      detailsLoaded: false, liveMetadata: false, shortComments: -1, rating: '' };
   }
 
   private static text(value: Object): string {
@@ -55,6 +64,18 @@ export class PosterCardData {
     if (typeof value === 'number') number = value;
     else if (typeof value === 'string' && /^\d+$/.test(value)) number = Number(value);
     return Number.isFinite(number) && Number.isInteger(number) && number >= 0 && number <= maximum ? number : unknown;
+  }
+
+  private static people(value: Object): string[] {
+    if (!Array.isArray(value)) return [];
+    const names: string[] = [];
+    for (const person of value as Object[]) {
+      if (person === null || typeof person !== 'object') continue;
+      const name = PosterCardData.text((person as Record<string, Object>)['name']);
+      if (name !== '' && names.indexOf(name) < 0) names.push(name);
+      if (names.length >= 12) break;
+    }
+    return names;
   }
 
   static dateText(value: string): string {
@@ -84,6 +105,11 @@ export class PosterCardData {
       if (PosterCardData.text(data['id']) !== subjectId) return null;
       const result = PosterCardData.empty(subjectId, seriesHint);
       result.liveMetadata = true;
+      result.detailsLoaded = true;
+      result.directors = PosterCardData.people(data['directors']);
+      result.actors = PosterCardData.people(data['actors']);
+      result.description = typeof data['intro'] === 'string' ? (data['intro'] as string).trim().substring(0, 2400) : '';
+      result.originalTitle = PosterCardData.text(data['original_title']);
       if (typeof data['is_tv'] === 'boolean') result.isSeries = data['is_tv'] as boolean;
       else if (data['type'] === 'tv' || data['subtype'] === 'TV' || data['subtype'] === 'tv') result.isSeries = true;
       else if (data['type'] === 'movie' || data['subtype'] === 'movie') result.isSeries = false;
@@ -147,6 +173,11 @@ export class PosterCardData {
       info.releaseDate = PosterCardData.dateText(PosterCardData.text(data['releaseDate']).replace(/\./g, '-'));
       info.durationMinutes = PosterCardData.integer(data['durationMinutes'], 0, 24000);
       info.totalEpisodes = PosterCardData.integer(data['totalEpisodes'], 0, 10000);
+      info.directors = PosterCardData.texts(data['directors']);
+      info.actors = PosterCardData.texts(data['actors']);
+      info.description = typeof data['description'] === 'string' ? (data['description'] as string).substring(0, 2400) : '';
+      info.originalTitle = PosterCardData.text(data['originalTitle']);
+      info.detailsLoaded = data['detailsLoaded'] === true;
       return info;
     } catch (e) { return null; }
   }

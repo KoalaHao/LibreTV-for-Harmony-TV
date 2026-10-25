@@ -24,7 +24,7 @@ export class CmsClient {
   /** 搜索：/api.php/provide/vod/?ac=videolist&wd=关键词 */
   static async search(source: VodSource, wd: string): Promise<SearchItem[]> {
     const url = CmsClient.apiBase(source) + '/?ac=videolist&wd=' + encodeURIComponent(wd);
-    const res = await HttpClient.getText(url, HttpClient.cmsHeaders(), 8000);
+    const res = await HttpClient.getText(url, HttpClient.cmsHeaders(), 8000, false);
     if (!res.ok) {
       throw new Error('源「' + source.name + '」请求失败');
     }
@@ -36,21 +36,21 @@ export class CmsClient {
    * 很多 CMS 克隆会忽略 ids 参数、直接返回最新列表，若盲取 list[0]
    * 就会出现「点任何影片都显示同一条」的问题，因此必须校验 vod_id。
    */
-  static async detail(source: VodSource, ids: string): Promise<VideoDetail> {
-    const byDetail = await CmsClient.tryDetail(source, ids, 'detail');
+  static async detail(source: VodSource, ids: string, timeoutMs: number = 8000): Promise<VideoDetail> {
+    const byDetail = await CmsClient.tryDetail(source, ids, 'detail', timeoutMs);
     if (byDetail !== null) {
       return byDetail;
     }
-    const byList = await CmsClient.tryDetail(source, ids, 'videolist');
+    const byList = await CmsClient.tryDetail(source, ids, 'videolist', timeoutMs);
     if (byList !== null) {
       return byList;
     }
     throw new Error('详情获取失败');
   }
 
-  private static async tryDetail(source: VodSource, ids: string, ac: string): Promise<VideoDetail | null> {
+  private static async tryDetail(source: VodSource, ids: string, ac: string, timeoutMs: number): Promise<VideoDetail | null> {
     const url = CmsClient.apiBase(source) + '/?ac=' + ac + '&ids=' + encodeURIComponent(ids);
-    const res = await HttpClient.getText(url, HttpClient.cmsHeaders(), 8000);
+    const res = await HttpClient.getText(url, HttpClient.cmsHeaders(), timeoutMs);
     if (!res.ok) {
       return null;
     }

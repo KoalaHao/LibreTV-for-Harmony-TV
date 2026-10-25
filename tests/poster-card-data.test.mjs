@@ -90,3 +90,11 @@ test('HTTP 400 with Douban code 1309 is a rate limit, not a movie-versus-series 
   assert.equal(Data.isRateLimited(400,JSON.stringify({msg:'traversal_error',code:404})),false);
   assert.equal(Data.isRateLimited(404,''),false);
 });
+test('expanded film metadata survives catalogue caching without inventing absent fields', () => {
+  const info=Data.parse(JSON.stringify({...series,original_title:'Original title',intro:'剧情简介样例。',directors:[{name:'导演甲'}],actors:[{name:'主演乙'},{name:'主演丙'}]}),'35588177');
+  assert.equal(info.detailsLoaded,true);assert.equal(info.description,'剧情简介样例。');
+  assert.deepEqual(info.directors,['导演甲']);assert.deepEqual(info.actors,['主演乙','主演丙']);
+  const restored=Data.restore(JSON.stringify(Data.stable(info)),'35588177');
+  assert.equal(restored.originalTitle,'Original title');assert.deepEqual(restored.actors,info.actors);
+  assert.equal(Data.restore('{"subjectId":"35588177"}','35588177').detailsLoaded,false);
+});

@@ -36,6 +36,19 @@ export class HttpClient {
     return await HttpClient.get(url, headers, timeoutMs, false, usingCache);
   }
 
+  static async getTextLimited(url: string, headers: Record<string, string> = {}, timeoutMs: number = 4000): Promise<HttpResult> {
+    return await HttpClient.get(url, headers, timeoutMs, false, false, 128 * 1024);
+  }
+
+  static async getProbeBytes(url: string, timeoutMs: number = 4000): Promise<HttpResult> {
+    return await HttpClient.get(url, { 'User-Agent': HttpClient.UA, 'Range': 'bytes=0-524287' },
+      timeoutMs, true, false, 512 * 1024);
+  }
+
+  static async head(url: string, timeoutMs: number = 4000): Promise<HttpResult> {
+    return await HttpClient.get(url, { 'User-Agent': HttpClient.UA }, timeoutMs, true, false, 4096, http.RequestMethod.HEAD);
+  }
+
   /**
    * 拉取 m3u8 / 静态资源用的容错请求。
    * 大量播放 CDN 按 Referer 做防盗链：带上它自己域名的 Referer 反而被判成盗链返回 403。
@@ -123,12 +136,14 @@ export class HttpClient {
   }
 
   private static async get(url: string, headers: Record<string, string>, timeoutMs: number, binary: boolean,
-    usingCache: boolean = true): Promise<HttpResult> {
+    usingCache: boolean = true, maxLimit: number = 5 * 1024 * 1024,
+    method: http.RequestMethod = http.RequestMethod.GET): Promise<HttpResult> {
     const httpRequest = http.createHttp();
     try {
       const options: http.HttpRequestOptions = {
-        method: http.RequestMethod.GET,
+        method: method,
         usingCache: usingCache,
+        maxLimit: maxLimit,
         header: headers,
         connectTimeout: timeoutMs,
         readTimeout: timeoutMs,

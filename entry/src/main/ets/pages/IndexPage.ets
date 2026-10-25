@@ -31,6 +31,8 @@ import { NavIds } from '../common/NavIds';
 import { EmptyView, LoadingView, SectionHeader, VodCard, SettingsRow } from '../components/CommonWidgets';
 import { SearchResultPage } from './SearchResultPage';
 import { SearchPageParam } from './SearchResultPage';
+import { DiscoveryPage, DiscoveryPageParam } from './DiscoveryPage';
+import { PosterOrigin } from '../model/DiscoveryLayout';
 import { DetailPage } from './DetailPage';
 import { DetailPageParam } from './DetailPage';
 import { PlayerPage } from './PlayerPage';
@@ -1047,7 +1049,13 @@ struct IndexPage {
     this.navStack.pushPath({ name: 'Search', param: p });
   }
 
-  private openRecommend(item: RecommendItem): void {
+  private openRecommend(item: RecommendItem, origin?: PosterOrigin): void {
+    if (DevicePolicy.isTV()) {
+      const param: DiscoveryPageParam = { item: item, openId: Date.now(),
+        origin: origin || { x: 40, y: 132, width: 185, height: 293 } };
+      this.navStack.pushPath({ name: 'Discovery', param: param });
+      return;
+    }
     const p: SearchPageParam = { keyword: item.title };
     this.navStack.pushPath({ name: 'Search', param: p });
   }
@@ -1674,7 +1682,7 @@ struct IndexPage {
                   TvPosterCard({ title: item.title, poster: item.cover,
                     rating: item.rating !== undefined ? item.rating : '',
                     subjectId: item.metadataProvider === 'douban' ? item.id : '', seriesHint: item.isTv,
-                    onOpen: () => this.openRecommend(item) })
+                    onOpen: (origin: PosterOrigin) => this.openRecommend(item, origin) })
                 }
               }, (item: RecommendItem) => item.id)
             }
@@ -1703,6 +1711,8 @@ struct IndexPage {
         navPathStack: this.navStack,
         keyword: (param as SearchPageParam).keyword
       })
+    } else if (name === 'Discovery') {
+      DiscoveryPage({ navPathStack: this.navStack, param: param as DiscoveryPageParam })
     } else if (name === 'Detail') {
       DetailPage({
         navPathStack: this.navStack,

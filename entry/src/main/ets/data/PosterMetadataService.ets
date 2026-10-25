@@ -44,12 +44,13 @@ export class PosterMetadataService {
     } catch (e) { return null; }
   }
 
-  static request(subjectId: string, seriesHint: boolean): Promise<PosterCardInfo | null> {
+  static request(subjectId: string, seriesHint: boolean, extended: boolean = false): Promise<PosterCardInfo | null> {
     if (!/^\d{7,10}$/.test(subjectId)) return Promise.resolve(null);
     const previous = PosterMetadataService.peek(subjectId);
     const now = Date.now();
     const cached = PosterMetadataService.cache.get(subjectId);
-    if (cached !== undefined && cached.metrics !== undefined && now - cached.metrics.updatedAt < PosterMetadataService.METRICS_TTL) {
+    if (cached !== undefined && cached.metrics !== undefined && now - cached.metrics.updatedAt < PosterMetadataService.METRICS_TTL &&
+      (!extended || cached.info.detailsLoaded)) {
       return Promise.resolve(previous);
     }
     if ((PosterMetadataService.blockedUntil > now && previous !== null) ||

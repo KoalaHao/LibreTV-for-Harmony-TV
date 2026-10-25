@@ -346,6 +346,7 @@ export class HistoryStore {
           pic: HistoryStore.optStr(rec['pic']),
           sourceName: HistoryStore.str(rec['sourceName']),
           episode: HistoryStore.num(rec['episode'], 0),
+          lineIndex: HistoryStore.num(rec['lineIndex'], 0),
           episodeName: HistoryStore.optStr(rec['episodeName']),
           playUrl: HistoryStore.optStr(rec['playUrl']),
           positionMs: HistoryStore.num(rec['positionMs'], 0),

@@ -147,7 +147,7 @@ export struct DetailPage {
     this.errorText = '';
     let detail: VideoDetail | null = null;
     try {
-      detail = await CmsClient.detail(source, vodId);
+      detail = await DetailCache.load(sourceKey, vodId, () => CmsClient.detail(source, vodId));
     } catch (e) {
       detail = null;
     }

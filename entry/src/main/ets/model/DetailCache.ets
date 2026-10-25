@@ -24,6 +24,23 @@ interface Entry {
 
 export class DetailCache {
   private static readonly map: Map<string, Entry> = new Map<string, Entry>();
+  private static readonly pending: Map<string, Promise<VideoDetail>> = new Map();
+
+  /** A source probe and a user's selection share one request instead of competing for the same CMS entry. */
+  static load(sourceKey: string, vodId: string, loader: () => Promise<VideoDetail>): Promise<VideoDetail> {
+    const cached = DetailCache.get(sourceKey, vodId);
+    if (cached !== null) return Promise.resolve(cached);
+    const key = DetailCache.key(sourceKey, vodId);
+    const pending = DetailCache.pending.get(key);
+    if (pending !== undefined) return pending;
+    const request = Promise.resolve().then(loader).then((detail: VideoDetail) => {
+      DetailCache.put(sourceKey, vodId, detail);
+      return detail;
+    });
+    DetailCache.pending.set(key, request);
+    request.then(() => { DetailCache.pending.delete(key); }, () => { DetailCache.pending.delete(key); });
+    return request;
+  }
 
   private static key(sourceKey: string, vodId: string): string {
     return sourceKey + '|' + vodId;

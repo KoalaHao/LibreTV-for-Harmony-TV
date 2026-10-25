@@ -4,6 +4,7 @@ import { PosterCardData, PosterCardInfo } from '../model/PosterCardData';
 import { PosterMetadataService } from '../data/PosterMetadataService';
 import { CountryFlags } from './CountryFlags';
 import { PosterHeat } from './PosterHeat';
+import { PosterOrigin } from '../model/DiscoveryLayout';
 
 /** Living-room controls share a visible hover/focus ring without moving adjacent content. */
 @Component
@@ -73,7 +74,7 @@ export struct TvPosterCard {
   @Prop title: string = '';
   @Prop poster: string = '';
   @Prop rating: string = '';
-  onOpen: () => void = () => {};
+  onOpen: (origin: PosterOrigin) => void = () => {};
   @State private hovered: boolean = false;
   @State private focused: boolean = false;
   @State private visible: boolean = false;
@@ -245,6 +246,7 @@ export struct TvPosterCard {
         this.requesting = false;
       }
     })
-    .onClick(() => this.onOpen())
+    .onClick((event: ClickEvent) => this.onOpen({ x: event.windowX - event.x, y: event.windowY - event.y,
+      width: this.cardWidth, height: this.cardHeight }))
   }
 }
