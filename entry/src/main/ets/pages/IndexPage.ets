@@ -3,6 +3,8 @@
  * 作为 Navigation 根页面承载全部子页面路由
  */
 
+import { TV_FOCUS } from '../common/TvFocus';
+import { BackNavigation } from '../common/BackNavigation';
 import { display } from '@kit.ArkUI';
 import { RecommendItem, PlayRecord, LiveChannel, EpgProgramme, VideoDetail } from '../model/Types';
 import { HistoryStore } from '../data/HistoryStore';
@@ -308,6 +310,7 @@ struct IndexPage {
   }
 
   aboutToDisappear(): void {
+    BackNavigation.clear();
     if (this.pullHintTimer !== -1) {
       clearTimeout(this.pullHintTimer);
       this.pullHintTimer = -1;
@@ -386,6 +389,16 @@ struct IndexPage {
       pic: t.pic
     };
     this.navStack.pushPath({ name: 'Player', param: p });
+  }
+
+  onBackPress(): boolean {
+    return BackNavigation.dispatch(this.navStack.getAllPathName(), () => {
+      this.navStack.pop();
+    }, () => {
+      if (this.filterPanel !== '') this.filterPanel = '';
+      else if (this.activeTab !== 0) this.selectTab(0);
+      else if (this.searchValue !== '') this.searchValue = '';
+    });
   }
 
   onPageShow(): void {
@@ -1675,6 +1688,8 @@ struct IndexPage {
     }
     .layoutWeight(1)
     .height('100%')
+    .focusable(true)
+    .focusBox(TV_FOCUS)
     .onClick(() => {
       this.triggerNavGlow(tabIndex);
       this.selectTab(tabIndex);
@@ -2208,6 +2223,8 @@ struct IndexPage {
         .margin({ right: 16, bottom: 20 })
         .transition(TransitionEffect.OPACITY.combine(TransitionEffect.scale({ x: 0.85, y: 0.85 }))
           .animation({ duration: 180, curve: Curve.EaseOut }))
+        .focusable(true)
+        .focusBox(TV_FOCUS)
         .onClick(() => {
           this.backToTop();
         })
@@ -2226,6 +2243,8 @@ struct IndexPage {
       .backgroundColor(this.recCatKey === cat.key ? $r('app.color.color_primary') : $r('app.color.color_chip_bg'))
       .borderRadius(this.chipRadius())
       .padding({ left: this.chipPadH(), right: this.chipPadH(), top: this.chipPadV(), bottom: this.chipPadV() })
+      .focusable(true)
+      .focusBox(TV_FOCUS)
       .onClick(() => {
         if (this.recCatKey !== cat.key) {
           this.recCatKey = cat.key;
@@ -2259,6 +2278,8 @@ struct IndexPage {
     .width('100%')
     .height(this.recLoadingMore ? 84 : 56)
     .justifyContent(FlexAlign.Center)
+    .focusable(true)
+    .focusBox(TV_FOCUS)
     .onClick(() => {
       this.loadMoreRecommend();
     })
@@ -2278,6 +2299,8 @@ struct IndexPage {
       .backgroundColor(this.filterActive(kind) ? $r('app.color.color_primary') : $r('app.color.color_chip_bg'))
       .borderRadius(this.filterPadV() + this.filterFont())
       .padding({ left: this.filterPadH(), right: this.filterPadH(), top: this.filterPadV(), bottom: this.filterPadV() })
+      .focusable(true)
+      .focusBox(TV_FOCUS)
       .onClick(() => {
         this.filterPanel = this.filterPanel === kind ? '' : kind;
       })
@@ -2291,6 +2314,8 @@ struct IndexPage {
       .backgroundColor($r('app.color.color_chip_bg'))
       .borderRadius(this.filterPadV() + this.filterFont())
       .padding({ left: this.filterPadH(), right: this.filterPadH(), top: this.filterPadV(), bottom: this.filterPadV() })
+      .focusable(true)
+      .focusBox(TV_FOCUS)
       .onClick(() => {
         this.clearFilter();
       })
@@ -2313,6 +2338,8 @@ struct IndexPage {
             .fontSize(12)
             .fontColor($r('app.color.color_primary'))
             .padding({ left: 10, right: 2, top: 2, bottom: 2 })
+            .focusable(true)
+            .focusBox(TV_FOCUS)
             .onClick(() => {
               this.filterPanel = '';
             })
@@ -2344,6 +2371,8 @@ struct IndexPage {
       .borderRadius(this.chipRadius() - 2)
       .padding({ left: 12, right: 12, top: 6, bottom: 6 })
       .margin({ right: 8, bottom: 8 })
+      .focusable(true)
+      .focusBox(TV_FOCUS)
       .onClick(() => {
         this.pickOption(opt);
       })
@@ -2368,6 +2397,8 @@ struct IndexPage {
             .fontSize(14)
             .fontColor($r('app.color.color_primary'))
             .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .focusable(true)
+            .focusBox(TV_FOCUS)
             .onClick(() => {
               this.refreshLiveGroups();
               // 刷新后立刻开始统计各源频道数，不用等用户逐个展开才看得到
@@ -2411,6 +2442,8 @@ struct IndexPage {
                       .opacity(0.4)
                   }
                   .width('100%')
+                  .focusable(true)
+                  .focusBox(TV_FOCUS)
                   .onClick(() => {
                     this.toggleLiveGroup(group.sourceKey);
                   })
@@ -2484,6 +2517,8 @@ struct IndexPage {
                           .width('100%')
                           // 上下各 10vp：44 的台标 + 20 内边距 = 64vp 行高，点选不易误触隔壁
                           .padding({ left: 6, right: 8, top: 10, bottom: 10 })
+                          .focusable(true)
+                          .focusBox(TV_FOCUS)
                           .onClick(() => {
                             this.openLive(group, ch);
                           })
@@ -2546,6 +2581,8 @@ struct IndexPage {
         // 之前贴 88vp，浮层下沿正好压在羽化段里 —— 那一段罩子已有 30% 上下的
         // 不透明度，表现为按钮下半截被"洗"进背景，看着像被过渡区遮住了。
         .margin({ bottom: IndexPage.LIVE_COLLAPSE_LIFT })
+        .focusable(true)
+        .focusBox(TV_FOCUS)
         .onClick(() => {
           this.collapseLongGroups();
         })

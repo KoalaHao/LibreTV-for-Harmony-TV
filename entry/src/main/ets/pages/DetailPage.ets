@@ -2,6 +2,9 @@
  * 视频详情页：简介 / 选集 / 播放 / 收藏 / 换源测速 / 下载
  */
 
+import { TV_FOCUS } from '../common/TvFocus';
+import { TvLayout } from '../common/TvLayout';
+import { BackNavigation } from '../common/BackNavigation';
 import { CmsClient } from '../model/CmsClient';
 import { DetailCache } from '../model/DetailCache';
 import { SearchService } from '../model/SearchService';
@@ -39,6 +42,8 @@ export struct DetailPage {
   vodId: string = '';
   title: string = '';
 
+  @State viewWidth: number = 0;
+  @State viewHeight: number = 0;
   @State loading: boolean = true;
   @State errorText: string = '';
   @State ready: boolean = false;
@@ -366,6 +371,14 @@ export struct DetailPage {
     return '播放';
   }
 
+  private handleBack(): void {
+    if (this.showSpeedPanel) {
+      this.showSpeedPanel = false;
+      return;
+    }
+    this.navPathStack.pop();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Top }) {
@@ -381,6 +394,8 @@ export struct DetailPage {
             Button('重试')
               .fontSize(14)
               .backgroundColor($r('app.color.color_primary'))
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 this.loadDetail(this.sourceKey, this.vodId);
               })
@@ -404,6 +419,8 @@ export struct DetailPage {
               Text('关闭')
                 .fontSize(13)
                 .fontColor($r('app.color.color_primary'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
                 .onClick(() => {
                   this.showSpeedPanel = false;
                 })
@@ -443,6 +460,8 @@ export struct DetailPage {
                     .padding({ left: 12, right: 12, top: 10, bottom: 10 })
                     .backgroundColor($r('app.color.color_chip_bg'))
                     .borderRadius(8)
+                    .focusable(true)
+                    .focusBox(TV_FOCUS)
                     .onClick(() => {
                       this.switchSource(item);
                     })
@@ -489,8 +508,10 @@ export struct DetailPage {
           .width(36)
           .height(40)
           .justifyContent(FlexAlign.Center)
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
-            this.navPathStack.pop();
+            this.handleBack();
           })
           Text(this.navTitle())
             .fontSize(17)
@@ -511,8 +532,21 @@ export struct DetailPage {
       .width('100%')
       .height('100%')
     }
+    .onAreaChange((_old: Area, area: Area) => {
+      const width = Number(area.width);
+      const height = Number(area.height);
+      if (width > 0 && height > 0) {
+        this.viewWidth = width;
+        this.viewHeight = height;
+      }
+    })
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
     .onShown(() => {
+      BackNavigation.register('Detail', () => this.handleBack());
       // Navigation 会复用缓存的 NavDestination 节点：换一部影片再进来时，
       // 构造参数还是上一部的、页面也不会重建 —— 必须自己取最新参数重新加载，
       // 否则会出现「点 A 打开的是 B 的详情」。
@@ -533,22 +567,29 @@ export struct DetailPage {
     })
   }
 
-  @Builder
-  detailBody() {
-    Scroll() {
-      Column({ space: 12 }) {
-        // 顶部占位：随内容滚走，让详情内容能从玻璃导航条背后滑过
-        Column()
-          .width('100%')
-          .height(56 + SystemInsets.top())
+  private wideLayout(): boolean {
+    return TvLayout.isLandscape(this.viewWidth, this.viewHeight);
+  }
 
+  private coverWidth(): number { return this.wideLayout() ? 164 : COVER_W; }
+  private coverHeight(): number { return this.wideLayout() ? 232 : COVER_H; }
+
+  private episodeColumns(): string {
+    const width = this.wideLayout()
+      ? this.viewWidth - TvLayout.sidebarWidth(this.viewWidth) - 120 : this.viewWidth - 32;
+    return TvLayout.columns(width, this.wideLayout() ? 132 : 84, 8);
+  }
+
+  @Builder
+  detailSummary() {
+    Column({ space: this.wideLayout() ? 20 : 12 }) {
         // 头部：海报 + 信息
         Row({ space: 12 }) {
           if (this.infoCover !== '') {
             Stack({ alignContent: Alignment.BottomStart }) {
               NetImage({ url: this.infoCover })
-                .width(COVER_W)
-                .height(COVER_H)
+                .width(this.coverWidth())
+                .height(this.coverHeight())
                 .borderRadius(10)
               if (this.progressPercent() !== '') {
                 // 进度条分两层：先铺满封面宽度的轨道，再按百分比盖一段进度。
@@ -565,25 +606,25 @@ export struct DetailPage {
                     .height(3)
                     .backgroundColor($r('app.color.color_primary'))
                 }
-                .width(COVER_W)
+                .width(this.coverWidth())
                 .height(3)
               }
             }
-            .width(COVER_W)
-            .height(COVER_H)
+            .width(this.coverWidth())
+            .height(this.coverHeight())
             .borderRadius(10)
             // 裁掉溢出：进度条贴着封面下沿时，两个下圆角也要跟着圆
             .clip(true)
           } else {
             Column()
-              .width(COVER_W)
-              .height(COVER_H)
+              .width(this.coverWidth())
+              .height(this.coverHeight())
               .backgroundColor($r('app.color.color_chip_bg'))
               .borderRadius(10)
           }
           Column({ space: 6 }) {
             Text(this.infoTitle)
-              .fontSize(18)
+              .fontSize(this.wideLayout() ? 24 : 18)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.color_text'))
               .maxLines(2)
@@ -656,9 +697,11 @@ export struct DetailPage {
             .justifyContent(FlexAlign.Center)
           }
           .layoutWeight(1)
-          .height(42)
+          .height(this.wideLayout() ? 48 : 42)
           .backgroundColor($r('app.color.color_primary'))
           .borderRadius(21)
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             this.playEpisode(this.currentEp);
           })
@@ -674,10 +717,12 @@ export struct DetailPage {
                 .height(20)
             }
           }
-          .width(42)
-          .height(42)
+          .width(this.wideLayout() ? 48 : 42)
+          .height(this.wideLayout() ? 48 : 42)
           .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             this.toggleFav();
           })
@@ -687,10 +732,12 @@ export struct DetailPage {
               .width(20)
               .height(20)
           }
-          .width(42)
-          .height(42)
+          .width(this.wideLayout() ? 48 : 42)
+          .height(this.wideLayout() ? 48 : 42)
           .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             this.runSpeedTest();
           })
@@ -703,10 +750,12 @@ export struct DetailPage {
               .height(20)
               .rotate({ angle: 180 })
           }
-          .width(42)
-          .height(42)
+          .width(this.wideLayout() ? 48 : 42)
+          .height(this.wideLayout() ? 48 : 42)
           .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             this.downloadCurrent();
           })
@@ -718,10 +767,12 @@ export struct DetailPage {
               .width(20)
               .height(20)
           }
-          .width(42)
-          .height(42)
+          .width(this.wideLayout() ? 48 : 42)
+          .height(this.wideLayout() ? 48 : 42)
           .backgroundColor($r('app.color.color_glass'))
           .borderRadius(21)
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             this.shareMovie();
           })
@@ -745,6 +796,8 @@ export struct DetailPage {
               .fontColor($r('app.color.color_primary'))
               .width('100%')
               .textAlign(TextAlign.RIGHT)
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 this.descExpanded = !this.descExpanded;
               })
@@ -754,6 +807,14 @@ export struct DetailPage {
           .alignItems(HorizontalAlign.Start)
         }
 
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  detailEpisodes() {
+    Column({ space: 20 }) {
         // 播放线路（源站返回多条线路时才显示）
         if (this.lines.length > 1) {
           Column({ space: 8 }) {
@@ -767,13 +828,15 @@ export struct DetailPage {
               Row({ space: 8 }) {
                 ForEach(this.lines, (line: PlayLine, idx: number) => {
                   Text(line.name + '（' + line.episodes.length + '集）')
-                    .fontSize(13)
+                    .fontSize(this.wideLayout() ? 16 : 13)
                     .fontColor(idx === this.currentLine ? Color.White : $r('app.color.color_text'))
                     .backgroundColor(idx === this.currentLine
                       ? $r('app.color.color_primary')
                       : $r('app.color.color_chip_bg'))
                     .borderRadius(14)
                     .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                    .focusable(true)
+                    .focusBox(TV_FOCUS)
                     .onClick(() => {
                       this.selectLine(idx);
                     })
@@ -802,15 +865,17 @@ export struct DetailPage {
             ForEach(this.episodes, (ep: Episode) => {
               GridItem() {
                 Text(ep.name)
-                  .fontSize(13)
+                  .fontSize(this.wideLayout() ? 16 : 13)
                   .fontColor(this.epTextColor(ep))
                   .backgroundColor(this.epBgColor(ep))
                   .borderRadius(8)
                   .width('100%')
-                  .height(36)
+                  .height(this.wideLayout() ? 48 : 40)
                   .textAlign(TextAlign.Center)
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .focusable(true)
+                  .focusBox(TV_FOCUS)
                   .onClick(() => {
                     this.currentEp = ep.index;
                     this.playEpisode(ep.index);
@@ -818,24 +883,51 @@ export struct DetailPage {
               }
             }, (ep: Episode) => ep.index.toString())
           }
-          .columnsTemplate('1fr 1fr 1fr 1fr')
+          .columnsTemplate(this.episodeColumns())
           .columnsGap(8)
           .rowsGap(8)
           .width('100%')
         }
         .padding({ left: 16, right: 16, bottom: 24 })
         .alignItems(HorizontalAlign.Start)
-      }
-      .width('100%')
-      // 关键：内容不满一屏时 Scroll 会把子内容垂直居中（实测 Column 落在 y=834，
-      // 而 Scroll 视口顶部是 y=196，正好等于 (2652-1376)/2），表现为「顶部大片空白」。
-      // minHeight 撑满视口即可强制顶对齐；内容超长时照常滚动。
-      .constraintSize({ minHeight: '100%' })
     }
-    .scrollBar(BarState.Off)
-    // Scroll 直接嵌在 Stack 里：Stack 的子组件不支持 layoutWeight，
-    // 必须显式给宽高，否则高度塌陷为内容高度，顶部留出大片空白。
     .width('100%')
-    .height('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  detailBody() {
+    if (this.wideLayout()) {
+      Row({ space: 24 }) {
+        Scroll() { this.detailSummary() }
+          .width(TvLayout.sidebarWidth(this.viewWidth))
+          .height('100%')
+          .align(Alignment.TopStart)
+          .scrollBar(BarState.Auto)
+        Scroll() { this.detailEpisodes() }
+          .layoutWeight(1)
+          .height('100%')
+          .align(Alignment.TopStart)
+          .scrollBar(BarState.Auto)
+      }
+      .alignItems(VerticalAlign.Top)
+      .width('100%')
+      .height('100%')
+      .padding({ left: 32, right: 32, top: 76 + SystemInsets.top(), bottom: 24 })
+    } else {
+      Scroll() {
+        Column({ space: 16 }) {
+          Column().height(64 + SystemInsets.top())
+          this.detailSummary()
+          this.detailEpisodes()
+        }
+        .width('100%')
+        .constraintSize({ minHeight: '100%' })
+      }
+      .align(Alignment.TopStart)
+      .width('100%')
+      .height('100%')
+      .scrollBar(BarState.Auto)
+    }
   }
 }

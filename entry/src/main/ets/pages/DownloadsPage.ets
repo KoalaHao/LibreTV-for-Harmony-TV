@@ -2,6 +2,7 @@
  * 下载管理页：缓存任务进度 / 离线播放 / 删除
  */
 
+import { BackNavigation } from '../common/BackNavigation';
 import { DownloadTaskRecord, PlayRecord } from '../model/Types';
 import { DownloadManager } from '../data/DownloadManager';
 import { HistoryStore } from '../data/HistoryStore';
@@ -235,6 +236,10 @@ export struct DownloadsPage {
     return pct + '%';
   }
 
+  private handleBack(): void {
+    this.navPathStack.pop();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Top }) {
@@ -421,7 +426,7 @@ export struct DownloadsPage {
             .height(40)
             .justifyContent(FlexAlign.Center)
             .onClick(() => {
-              this.navPathStack.pop();
+              this.handleBack();
             })
             Text('下载管理')
               .fontSize(17)
@@ -448,7 +453,12 @@ export struct DownloadsPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
     .onShown(() => {
+      BackNavigation.register('Downloads', () => this.handleBack());
       // 缓存节点复用不会重跑 aboutToAppear：重新开闸并立刻拉一次，
       // 免得用户看到上一次留下的旧进度。
       this.refreshTasks();

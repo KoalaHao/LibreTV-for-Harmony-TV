@@ -5,6 +5,7 @@
  * 现在独立成页，入口挂在「我的」一级页面的「关于」菜单里。
  */
 
+import { BackNavigation } from '../common/BackNavigation';
 import { AppVersion } from '../common/AppVersion';
 import { pageBgGradient } from '../common/GlassTheme';
 import { SystemInsets } from '../common/SystemInsets';
@@ -49,6 +50,10 @@ export struct AboutPage {
     '八、使用本应用即表示你已阅读、理解并同意本声明的全部内容；如不同意，请立即停止使用并卸载本应用。'
   ];
 
+  private handleBack(): void {
+    this.navPathStack.pop();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Top }) {
@@ -91,7 +96,7 @@ export struct AboutPage {
                     .fontSize(15)
                     .fontWeight(FontWeight.Medium)
                     .fontColor($r('app.color.color_text'))
-                  Text('by PANPP')
+                  Text('TV fork · KoalaHao')
                     .fontSize(12)
                     .fontColor($r('app.color.color_primary'))
                 }
@@ -111,6 +116,10 @@ export struct AboutPage {
                   .fontColor($r('app.color.color_text_secondary'))
                   .width('100%')
                   .textAlign(TextAlign.Start)
+                Text('基于 panhaichen-creator/LibreTV-for-HarmonyOS（PANPP），保留上游贡献者署名。')
+                  .fontSize(12)
+                  .fontColor($r('app.color.color_text_secondary'))
+                  .width('100%')
                 Text('开源协议：AGPL-3.0 · 部分实现参考 LibreTV（LibreSpark）开源项目，本应用并非该项目官方版本')
                   .fontSize(12)
                   .lineHeight(18)
@@ -179,7 +188,7 @@ export struct AboutPage {
             .height(40)
             .justifyContent(FlexAlign.Center)
             .onClick(() => {
-              this.navPathStack.pop();
+              this.handleBack();
             })
             Text('关于')
               .fontSize(17)
@@ -197,5 +206,12 @@ export struct AboutPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
+    .onShown(() => {
+      BackNavigation.register('About', () => this.handleBack());
+    })
   }
 }

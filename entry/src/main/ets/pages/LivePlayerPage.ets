@@ -3,6 +3,7 @@
  * 直播流由 AVPlayer 原生刷新播放列表，不做本地重写
  */
 
+import { BackNavigation } from '../common/BackNavigation';
 import { window, PiPWindow } from '@kit.ArkUI';
 import { DevicePolicy } from '../common/DevicePolicy';
 import { ScreenKeeper } from '../common/ScreenKeeper';
@@ -905,6 +906,10 @@ export struct LivePlayerPage {
     }, 260);
   }
 
+  private handleBack(): void {
+    this.back();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Center }) {
@@ -1166,10 +1171,11 @@ export struct LivePlayerPage {
     .hideTitleBar(true)
     .hideBackButton(true)
     .onShown(() => {
+      BackNavigation.register('LivePlayer', () => this.handleBack());
       this.onPageShown();
     })
     .onBackPressed(() => {
-      this.back();
+      this.handleBack();
       return true;
     })
   }

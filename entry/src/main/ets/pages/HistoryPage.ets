@@ -2,6 +2,7 @@
  * 历史页：播放历史（续播）/ 我的收藏
  */
 
+import { BackNavigation } from '../common/BackNavigation';
 import { PlayRecord, FavoriteItem, LiveFavoriteItem } from '../model/Types';
 import { HistoryStore } from '../data/HistoryStore';
 import { Utils } from '../common/Utils';
@@ -138,6 +139,10 @@ export struct HistoryPage {
       })
     });
     this.dlgCtl.open();
+  }
+
+  private handleBack(): void {
+    this.navPathStack.pop();
   }
 
   build() {
@@ -408,7 +413,7 @@ export struct HistoryPage {
             .height(40)
             .justifyContent(FlexAlign.Center)
             .onClick(() => {
-              this.navPathStack.pop();
+              this.handleBack();
             })
             Text(this.pageTitle())
               .fontSize(17)
@@ -442,7 +447,12 @@ export struct HistoryPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
     .onShown(() => {
+      BackNavigation.register('History', () => this.handleBack());
       // 缓存节点复用后 mode 还停在上一次：从「播放历史」退出再进「我的收藏」，
       // 看到的会是历史列表。参数必须重新取。
       const raw: Object | null = latestNavParam(this.navPathStack, 'History');

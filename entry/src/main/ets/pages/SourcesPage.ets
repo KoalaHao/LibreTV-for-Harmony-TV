@@ -2,6 +2,7 @@
  * 视频源管理页：点播源（Apple CMS）/ 直播源（M3U）增删改测、订阅导入导出
  */
 
+import { BackNavigation } from '../common/BackNavigation';
 import { VodSource, LiveSource, ExportVodEntry, ExportLiveEntry, SourceExportPayload } from '../model/Types';
 import { SourceManager } from '../data/SourceManager';
 import { SubscriptionParser, FlexibleParseResult } from '../model/SubscriptionParser';
@@ -533,6 +534,17 @@ export struct SourcesPage {
     return $r('app.color.color_success');
   }
 
+  private handleBack(): void {
+    if (this.showAddVod || this.showAddLive || this.showImport || this.showExport) {
+      this.showAddVod = false;
+      this.showAddLive = false;
+      this.showImport = false;
+      this.showExport = false;
+      return;
+    }
+    this.navPathStack.pop();
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.Bottom }) {
@@ -584,7 +596,7 @@ export struct SourcesPage {
           .height(40)
           .justifyContent(FlexAlign.Center)
           .onClick(() => {
-            this.navPathStack.pop();
+            this.handleBack();
           })
           Text('视频源')
             .fontSize(17)
@@ -631,7 +643,12 @@ export struct SourcesPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
     .onShown(() => {
+      BackNavigation.register('Sources', () => this.handleBack());
       // 缓存节点复用不会重跑 aboutToAppear：源可能在别处被增删过，重新读一遍
       this.refresh();
     })

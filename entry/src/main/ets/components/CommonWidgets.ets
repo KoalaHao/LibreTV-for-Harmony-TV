@@ -1,3 +1,4 @@
+import { TV_FOCUS } from '../common/TvFocus';
 /**
  * 通用 UI 组件：加载态 / 空态 / 视频卡片 / 设置行 / 分组标题 / 标签
  */
@@ -74,6 +75,8 @@ export struct SectionHeader {
           .fontSize(14)
           .fontColor($r('app.color.color_primary'))
           .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+          .focusable(true)
+          .focusBox(TV_FOCUS)
           .onClick(() => {
             this.onActionClick();
           })
@@ -314,6 +317,8 @@ export struct VodCard {
       width: 1,
       color: this.mainColor !== '' ? this.glowColor(0.55) : '#1FFFFFFF'
     })
+    .focusable(true)
+    .focusBox(TV_FOCUS)
     .onClick(() => {
       this.onCardClick();
     })
@@ -353,6 +358,8 @@ export struct SettingsRow {
     .width('100%')
     .padding({ left: 16, right: 16, top: 14, bottom: 14 })
     .backgroundColor($r('app.color.color_card'))
+    .focusable(true)
+    .focusBox(TV_FOCUS)
     .onClick(() => {
       this.onRowClick();
     })

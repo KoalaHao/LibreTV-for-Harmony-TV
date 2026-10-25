@@ -2,6 +2,8 @@
  * 搜索结果页：聚合多源结果、跨源同名合并、搜索历史
  */
 
+import { TV_FOCUS } from '../common/TvFocus';
+import { BackNavigation } from '../common/BackNavigation';
 import { MergedVideo } from '../model/Types';
 import { SearchService } from '../model/SearchService';
 import { SettingsStore } from '../data/SettingsStore';
@@ -74,6 +76,10 @@ export struct SearchResultPage {
       title: v.name
     };
     this.navPathStack.pushPath({ name: 'Detail', param: p });
+  }
+
+  private handleBack(): void {
+    this.navPathStack.pop();
   }
 
   build() {
@@ -178,6 +184,8 @@ export struct SearchResultPage {
                     .padding(10)
                     .backgroundColor($r('app.color.color_glass'))
                     .borderRadius(10)
+                    .focusable(true)
+                    .focusBox(TV_FOCUS)
                     .onClick(() => {
                       this.openDetail(v);
                     })
@@ -214,8 +222,10 @@ export struct SearchResultPage {
             .width(32)
             .height(40)
             .justifyContent(FlexAlign.Center)
+            .focusable(true)
+            .focusBox(TV_FOCUS)
             .onClick(() => {
-              this.navPathStack.pop();
+              this.handleBack();
             })
             Search({
               placeholder: '搜索电影 / 电视剧',
@@ -238,7 +248,12 @@ export struct SearchResultPage {
       .height('100%')
     }
     .hideTitleBar(true)
+    .onBackPressed(() => {
+      this.handleBack();
+      return true;
+    })
     .onShown(() => {
+      BackNavigation.register('Search', () => this.handleBack());
       this.historyWords = HistoryStore.shared().getSearchHistory();
       // Navigation 会复用缓存的 NavDestination 节点：换个关键词再搜时页面不会重建，
       // 必须自己取最新参数，否则看到的还是上一次的结果。
@@ -274,6 +289,8 @@ export struct SearchResultPage {
             .fontSize(13)
             .fontColor($r('app.color.color_text_secondary'))
             .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+            .focusable(true)
+            .focusBox(TV_FOCUS)
             .onClick(() => {
               HistoryStore.shared().clearSearchHistory();
               this.historyWords = [];
@@ -294,6 +311,8 @@ export struct SearchResultPage {
               .borderRadius(16)
               .padding({ left: 12, right: 12, top: 6, bottom: 6 })
               .margin({ right: 8, bottom: 8 })
+              .focusable(true)
+              .focusBox(TV_FOCUS)
               .onClick(() => {
                 this.searchValue = w;
                 this.runSearch();
