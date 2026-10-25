@@ -223,6 +223,7 @@ export struct TvPosterCard {
         .borderRadius({ bottomLeft: 24, bottomRight: 24 }).clip(true)
     }
     .width('100%').borderRadius(24)
+    .renderGroup(!this.hovered && !this.focused)
     .overlay(this.cardOutline(), { align: Alignment.Center })
     .onAreaChange((oldArea: Area, newArea: Area) => {
       const width = Number(newArea.width);

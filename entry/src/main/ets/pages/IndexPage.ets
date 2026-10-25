@@ -33,6 +33,7 @@ import { SearchResultPage } from './SearchResultPage';
 import { SearchPageParam } from './SearchResultPage';
 import { DiscoveryPage, DiscoveryPageParam } from './DiscoveryPage';
 import { PosterOrigin } from '../model/DiscoveryLayout';
+import { TvFeedDataSource, TvFeedRow } from '../model/TvFeedDataSource';
 import { DetailPage } from './DetailPage';
 import { DetailPageParam } from './DetailPage';
 import { PlayerPage } from './PlayerPage';
@@ -198,7 +199,8 @@ struct IndexPage {
   @State navGlowScale: number = 0.5;
   @State searchValue: string = '';
   @State homeHistory: PlayRecord[] = [];
-  @State recommendItems: RecommendItem[] = [];
+  @State @Watch('recommendItemsChanged') recommendItems: RecommendItem[] = [];
+  private readonly tvFeed: TvFeedDataSource = new TvFeedDataSource();
   @State recommendLoading: boolean = false;
   /**
    * 分类切换 / 换一换期间的轻量提示开关。
@@ -1635,10 +1637,13 @@ struct IndexPage {
     }.width('100%').height('100%')
   }
 
+  private recommendItemsChanged(): void {
+    if (DevicePolicy.isTV()) this.tvFeed.setItems(this.recommendItems);
+  }
+
   @Builder
-  tvHomeContent() {
-    Scroll(this.homeScroller) {
-      Column({ space: 22 }) {
+  private tvHomeHeader() {
+    Column({ space: 22 }) {
         if (this.homeHistory.length > 0 && !this.tvCategorySelected) {
           Column({ space: 12 }) {
             Row() {
@@ -1675,33 +1680,49 @@ struct IndexPage {
           if (this.recommendItems.length === 0) {
             if (this.recommendLoading) LoadingView().height(260)
             else EmptyView({ emptyText: this.hasFilter() ? '当前筛选没有结果，试试放宽条件' : '暂无推荐，请检查网络或切换推荐来源' })
-          } else {
-            Grid() {
-              ForEach(this.recommendItems, (item: RecommendItem) => {
-                GridItem() {
-                  TvPosterCard({ title: item.title, poster: item.cover,
-                    rating: item.rating !== undefined ? item.rating : '',
-                    subjectId: item.metadataProvider === 'douban' ? item.id : '', seriesHint: item.isTv,
-                    onOpen: (origin: PosterOrigin) => this.openRecommend(item, origin) })
-                }
-              }, (item: RecommendItem) => item.id)
-            }
-            .columnsTemplate('1fr 1fr 1fr 1fr 1fr 1fr').columnsGap(18).rowsGap(24)
-            .width('100%').opacity(this.recSwitching ? 0.45 : 1)
-            this.loadMoreFooter()
           }
         }.width('100%')
-      }
-      .width('100%').padding({ left: 40, right: 40, top: 96, bottom: 36 })
-      .onAreaChange((oldArea: Area, newArea: Area) => {
-        const width = newArea.width as number;
-        if (width > 0 && Math.abs(width - this.homeWidth) > 1) this.homeWidth = width;
-      })
+    }.width('100%').padding({ top: 96 })
+  }
+
+  @Builder
+  tvHomeContent() {
+    List({ space: 24, scroller: this.homeScroller }) {
+      LazyForEach(this.tvFeed, (row: TvFeedRow) => {
+        ListItem() {
+          if (row.kind === 'header') {
+            this.tvHomeHeader()
+          } else if (row.kind === 'posters') {
+            Row({ space: 18 }) {
+              ForEach([0, 1, 2, 3, 4, 5], (slot: number) => {
+                if (slot < row.items.length) {
+                  TvPosterCard({ title: row.items[slot].title, poster: row.items[slot].cover,
+                    rating: row.items[slot].rating || '',
+                    subjectId: row.items[slot].metadataProvider === 'douban' ? row.items[slot].id : '',
+                    seriesHint: row.items[slot].isTv,
+                    onOpen: (origin: PosterOrigin) => this.openRecommend(row.items[slot], origin) })
+                    .layoutWeight(1)
+                } else {
+                  Blank().layoutWeight(1)
+                }
+              }, (slot: number) => slot.toString())
+            }.width('100%').alignItems(VerticalAlign.Top).opacity(this.recSwitching ? 0.45 : 1)
+          } else {
+            Column() {
+              if (this.recommendItems.length > 0) this.loadMoreFooter()
+            }.width('100%').padding({ bottom: 36 })
+          }
+        }.width('100%')
+      }, (row: TvFeedRow) => row.key)
     }
-    .width('100%').height('100%').scrollBar(BarState.Off)
-    .edgeEffect(EdgeEffect.Spring)
+    .width('100%').height('100%').padding({ left: 40, right: 40 })
+    .cachedCount(1).scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
+    .onAreaChange((oldArea: Area, newArea: Area) => {
+      const width = Number(newArea.width);
+      if (width > 0 && Math.abs(width - this.homeWidth) > 1) this.homeWidth = width;
+    })
     .onScrollStop(() => { this.homeOffset = this.homeScroller.currentOffset().yOffset; })
-    .onScrollEdge((edge: Edge) => { if (edge === Edge.Bottom) this.loadMoreRecommend(); })
+    .onReachEnd(() => { this.loadMoreRecommend(); })
   }
 
   @Builder

@@ -8,27 +8,11 @@
 
 import { image } from '@kit.ImageKit';
 import { ImageBytes } from '../common/ImageBytes';
-
-/** 简单的 PixelMap 内存缓存（按「URL + 解码框」去重） */
-class NetImageCache {
-  private static readonly map: Map<string, image.PixelMap> = new Map<string, image.PixelMap>();
-  private static readonly MAX: number = 240;
-
-  static get(key: string): image.PixelMap | undefined {
-    return NetImageCache.map.get(key);
-  }
-
-  static put(key: string, pm: image.PixelMap): void {
-    if (NetImageCache.map.size >= NetImageCache.MAX) {
-      NetImageCache.map.clear();
-    }
-    NetImageCache.map.set(key, pm);
-  }
-}
+import { PixelMapCache } from '../common/PixelMapCache';
 
 @Component
 export struct NetImage {
-  @Prop url: string = '';
+  @Prop @Watch('imageChanged') url: string = '';
   @Prop referer: string = '';
   /**
    * 解码框（像素上限），默认 480×720，对应竖版海报。
@@ -46,10 +30,16 @@ export struct NetImage {
   /** 填充方式。海报默认 Cover（裁边、不留空）；台标传 Contain，完整显示不变形 */
   @Prop fit: ImageFit = ImageFit.Cover;
   @State pm: image.PixelMap | undefined = undefined;
+  private alive: boolean = false;
+  private request: number = 0;
 
   aboutToAppear(): void {
+    this.alive = true;
     this.loadImage();
   }
+
+  aboutToDisappear(): void { this.alive = false; this.request++; this.pm = undefined; }
+  private imageChanged(): void { if (this.alive) this.loadImage(); }
 
   /**
    * 算解码尺寸：保持原图比例，等比缩进 boxWidth×boxHeight。
@@ -84,35 +74,34 @@ export struct NetImage {
 
   /** 供外部在 URL 变化时刷新（父组件用 key 重建即可） */
   private async loadImage(): Promise<void> {
+    const request = ++this.request;
     const u = this.url;
+    this.pm = undefined;
     if (u === '') {
       return;
     }
     // 同一个 URL 可能被不同尺寸的调用方请求，缓存键要把解码框算进去
     const key: string = u + '|' + this.boxWidth + 'x' + this.boxHeight;
-    const cached = NetImageCache.get(key);
+    const cached = PixelMapCache.get(key);
     if (cached !== undefined) {
       this.pm = cached;
       return;
     }
     // 走共享字节缓存：与海报取色（PosterColor）复用同一份字节，
     // 同一张海报不会被下载两次。
-    const buf: ArrayBuffer = await ImageBytes.fetch(u, this.referer);
-    if (buf.byteLength === 0) {
-      return;
-    }
     try {
-      const src = image.createImageSource(buf);
-      // DecodingOptions 仅支持 desiredSize（Size{width,height}），无 desiredPixelWidth/Height
-      const opts: image.DecodingOptions = {};
-      const target: image.Size | undefined = await this.decodeSizeFor(src);
-      if (target !== undefined) {
-        opts.desiredSize = target;
-      }
-      const pm = await src.createPixelMap(opts);
-      await src.release();
-      NetImageCache.put(key, pm);
-      this.pm = pm;
+      const pm = await PixelMapCache.load(key, async () => {
+        const buf = await ImageBytes.fetch(u, this.referer);
+        if (buf.byteLength === 0) return undefined;
+        const src = image.createImageSource(buf);
+        try {
+          const opts: image.DecodingOptions = {};
+          const target = await this.decodeSizeFor(src);
+          if (target !== undefined) opts.desiredSize = target;
+          return await src.createPixelMap(opts);
+        } finally { await src.release(); }
+      });
+      if (this.alive && request === this.request && this.url === u) this.pm = pm;
     } catch (e) {
       // 解码失败：保持占位底色
     }
