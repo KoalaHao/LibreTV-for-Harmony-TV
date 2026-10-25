@@ -14,7 +14,7 @@ globalThis.__continuationAbilityKit = {
   wantConstant: { Params: { SUPPORT_CONTINUE_PAGE_STACK_KEY: 'pageStack', SUPPORT_CONTINUE_SOURCE_EXIT_KEY: 'sourceExit' } },
   hilog: { info() {}, warn() {}, error() {} },
   Store: { shared: () => ({ init() {} }) }, SourceManager: { shared: () => ({ load() {} }) },
-  SearchCacheStorage: { init() {} },
+  SearchCacheStorage: { init() {} }, AdReportStorage: { init() {} },
   DownloadManager: { shared: () => ({ init() {}, resumeInterrupted() {} }) },
   DevicePolicy: { isTV: () => false },
   SettingsStore: { shared: () => ({ get: () => ({ themeMode: 'system' }) }) },
@@ -24,7 +24,7 @@ globalThis.__continuationAbilityKit = {
 };
 const { default: EntryAbility } = await loadEts('entryability/EntryAbility.ets', [
   [/^import .*;$/gm, ''],
-  [/^/, 'const { UIAbility, AbilityConstant, ConfigurationConstant, wantConstant, hilog, Store, SearchCacheStorage, SourceManager, DownloadManager, SettingsStore, PlaybackContinuation, ContinuationService, ShareLink, DeepLink, DevicePolicy } = globalThis.__continuationAbilityKit;\n']
+  [/^/, 'const { UIAbility, AbilityConstant, ConfigurationConstant, wantConstant, hilog, Store, SearchCacheStorage, AdReportStorage, SourceManager, DownloadManager, SettingsStore, PlaybackContinuation, ContinuationService, ShareLink, DeepLink, DevicePolicy } = globalThis.__continuationAbilityKit;\n']
 ]);
 const state = id => ({ schema: 1, transferId: id, sourceKey: 'src', vodId: '42', episode: 3,
   episodeName: '第四集', title: '影片', pic: '', lineIndex: 1, positionMs: 123450,

@@ -7,6 +7,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { HttpClient } from '../net/HttpClient';
 import { M3u8Rewriter } from '../model/M3u8Rewriter';
 import { Utils } from '../common/Utils';
+import { AdDiagnostics, AdFilterTrace } from '../model/AdDiagnostics';
 
 export interface SegmentList {
   urls: string[];
@@ -22,6 +23,7 @@ export interface ResolvedPlayUrl {
   file: fs.File | null;
   /** 过滤掉的分片数（仅 m3u8） */
   filteredCount: number;
+  trace: AdFilterTrace;
   error: string;
 }
 
@@ -144,19 +146,21 @@ export class PlayUrlResolver {
     // 采集站可能给分享页而不是直链，先转换一次；不是页面会原样返回
     const url: string = await PlayUrlResolver.resolveSharePage(rawUrl);
     const headers = PlayUrlResolver.headersFor(url);
-    const fail = (msg: string): ResolvedPlayUrl => ({
-      kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: msg
+    const fail = (msg: string, trace: AdFilterTrace): ResolvedPlayUrl => ({
+      kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: msg, trace: trace
     });
     if (!PlayUrlResolver.isM3u8(url)) {
-      return { kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: '' };
+      return { kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: '',
+        trace: AdDiagnostics.empty(adFilter, 'direct', url, '当前使用直链，未读取 M3U8 分片清单。') };
     }
     if (adFilter === 'off') {
-      return { kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: '' };
+      return { kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: '',
+        trace: AdDiagnostics.empty(adFilter, 'off', url, '过滤已关闭；没有额外请求清单，无法估算当前分片。') };
     }
     const outcome = await M3u8Rewriter.rewrite(url, headers, adFilter, outDir);
     if (!outcome.ok || outcome.file === null) {
       // 重写失败时退化为直链播放（不阻断观看）
-      return fail(outcome.error);
+      return fail(outcome.error, outcome.trace);
     }
     let size = 0;
     try {
@@ -171,6 +175,7 @@ export class PlayUrlResolver {
       headers: headers,
       file: outcome.file,
       filteredCount: outcome.filteredCount,
+      trace: outcome.trace,
       error: ''
     };
   }

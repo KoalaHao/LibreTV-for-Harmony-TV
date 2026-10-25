@@ -10,6 +10,9 @@ import { KeyCode } from '@kit.InputKit';
 import { TV_FOCUS } from '../common/TvFocus';
 import { BackNavigation } from '../common/BackNavigation';
 import { fileIo as fs } from '@kit.CoreFileKit';
+import { pasteboard } from '@kit.BasicServicesKit';
+import { AdDiagnostics, AdDiagnosticSession, AdDiagnosticView, AdReportContext } from '../model/AdDiagnostics';
+import { AdReportStorage } from '../data/AdReportStorage';
 import { window, PiPWindow, promptAction } from '@kit.ArkUI';
 import { AvPlayerController, PlaybackSpeedOption, VideoStreamInfo } from '../player/AvPlayerController';
 import { DevicePolicy } from '../common/DevicePolicy';
@@ -86,6 +89,14 @@ export struct PlayerPage {
   private tvGesture: TvPlaybackGesture = new TvPlaybackGesture();
   private holderFile: fs.File | null = null;
   private cacheDir: string = '';
+  private readonly adSession: AdDiagnosticSession = new AdDiagnosticSession();
+  private adScope: string = '';
+  private lastAdRefreshAt: number = 0;
+  private latestAdReport: string = '';
+  @State private showAdDiagnostics: boolean = false;
+  @State private adView: AdDiagnosticView = AdDiagnostics.view(AdDiagnostics.empty(), 0);
+  @State private adLastMark: string = '尚未标记广告';
+  @State private adMarkBusy: boolean = false;
   private surfaceId: string = '';
   private lastSaveAt: number = 0;
   private hideTimer: number = -1;
@@ -419,6 +430,8 @@ export struct PlayerPage {
 
   /** 把上一次留下的播放状态清干净（画面尺寸与 Surface id 保留，它们还有用） */
   private resetForReentry(): void {
+    this.adSession.close();
+    this.showAdDiagnostics = false;
     this.released = false;
     this.starting = false;
     this.playPending = false;
@@ -559,6 +572,7 @@ export struct PlayerPage {
         this.sliderValue = Math.floor(positionMs / 1000);
       }
       this.maybeSaveProgress(positionMs, durationMs);
+      this.refreshAdView();
       // Refresh the session anchor after seeks and at a modest rate while playing.
       if (Date.now() - this.lastSessionSyncAt >= 5000) this.syncCastPlayback(this.playing);
     };
@@ -951,6 +965,9 @@ export struct PlayerPage {
   }
 
   private async doStartPlay(): Promise<boolean> {
+    const adToken = this.adSession.begin(this.settings.adFilter, this.offlineDir !== '' ? 'offline' : 'pending', this.episodeUrl);
+    this.adScope = this.adScopeKey();
+    this.refreshAdView(true);
     this.errorText = '';
     this.loadingHint = '';
     // 换集/换源/重试都是「重新起播」：回到未起播状态，加载圈立即出现，
@@ -1006,11 +1023,18 @@ export struct PlayerPage {
     }
     this.starting = true;
     this.buffering = true;
+    const adScope = this.adScopeKey();
+    this.adScope = adScope;
     const resolved = await PlayUrlResolver.resolve(ep.url, this.settings.adFilter, this.cacheDir);
+    if (this.released || adScope !== this.adScopeKey() || !this.adSession.update(adToken, resolved.trace)) {
+      if (resolved.file !== null) { try { fs.closeSync(resolved.file.fd); } catch (e) { /* Discard stale results. */ } }
+      return false;
+    }
+    this.refreshAdView(true);
     this.holderFile = resolved.file;
     // 让用户看得见广告过滤在工作；为 0 时不打扰（该源本来就没插广告）
     if (resolved.filteredCount > 0) {
-      this.toast('已过滤 ' + resolved.filteredCount + ' 个广告分片');
+      this.toast('已过滤 ' + resolved.filteredCount + ' 个疑似广告分片');
     }
     if (resolved.kind === 'fd') {
       return await this.player.playFd(resolved.url, resolved.headers, this.positionMs);
@@ -1142,6 +1166,8 @@ export struct PlayerPage {
       return;
     }
     this.released = true;
+    this.adSession.close();
+    this.showAdDiagnostics = false;
     this.tvGesture.reset();
     this.releaseCastSession();
     this.clearStall();
@@ -1185,7 +1211,7 @@ export struct PlayerPage {
       clearTimeout(this.hideTimer);
     }
     this.hideTimer = setTimeout(() => {
-      if (this.playing && !this.showEpisodes && !this.showSpeeds && !this.showSources) {
+      if (this.playing && !this.showEpisodes && !this.showSpeeds && !this.showSources && !this.showAdDiagnostics) {
         this.controlsVisible = false;
       }
     }, 4000);
@@ -1296,6 +1322,7 @@ export struct PlayerPage {
   }
 
   private async runSpeedTest(): Promise<void> {
+    this.showAdDiagnostics = false;
     if (this.title === '') {
       return;
     }
@@ -1652,6 +1679,7 @@ export struct PlayerPage {
 
   /** 开始滑动：按落点左右分出调音量还是调亮度，并记下基准值 */
   private beginAdjust(x: number): void {
+    if (this.showAdDiagnostics) return;
     const half: number = this.canvasW > 0 ? this.canvasW / 2 : 0;
     const kind: string = x > half ? 'brightness' : 'volume';
     this.clearAdjustTimer();
@@ -1960,7 +1988,7 @@ export struct PlayerPage {
     if (code === KeyCode.KEYCODE_MEDIA_PLAY_PAUSE) this.togglePlay();
     else if (code === KeyCode.KEYCODE_MEDIA_PLAY) this.player.play();
     else if (code === KeyCode.KEYCODE_MEDIA_PAUSE) this.player.pause();
-    else if (!this.controlsVisible && !this.showEpisodes && !this.showSpeeds && !this.showSources) {
+    else if (!this.controlsVisible && !this.showEpisodes && !this.showSpeeds && !this.showSources && !this.showAdDiagnostics) {
       if (code === KeyCode.KEYCODE_DPAD_LEFT) this.seekFromRemote(this.positionMs - 10000);
       else if (code === KeyCode.KEYCODE_DPAD_RIGHT) this.seekFromRemote(this.positionMs + 10000);
       else if (code === KeyCode.KEYCODE_DPAD_CENTER || code === KeyCode.KEYCODE_ENTER) this.togglePlay();
@@ -1979,6 +2007,111 @@ export struct PlayerPage {
     if (this.superResolutionState === 'unavailable') return '视频超分：设备暂不支持';
     if (this.superResolutionState === 'inactive') return '视频超分：当前未生效';
     return '视频超分：已关闭';
+  }
+
+  private adScopeKey(): string {
+    return JSON.stringify([this.sourceKey, this.vodId, this.currentEp.toString(), this.lineIndex.toString()]);
+  }
+
+  private refreshAdView(force: boolean = false): void {
+    if (!force && (!this.showAdDiagnostics || Date.now() - this.lastAdRefreshAt < 1000)) return;
+    this.lastAdRefreshAt = Date.now();
+    this.adView = AdDiagnostics.view(this.adSession.current(), this.positionMs, this.durationMs);
+  }
+
+  private openAdDiagnostics(): void {
+    this.tvGesture.cancel(); this.clearAdjustTimer(); this.adjustKind = '';
+    this.showEpisodes = false; this.showSpeeds = false; this.showSources = false;
+    this.controlsVisible = true; this.showAdDiagnostics = true;
+    this.latestAdReport = AdReportStorage.latest();
+    this.adLastMark = '尚未标记广告';
+    if (this.latestAdReport !== '') {
+      try {
+        const record = JSON.parse(this.latestAdReport) as Record<string, Object>;
+        const context = record['context'] as Record<string, Object>;
+        this.adLastMark = '最近标记：' + (typeof context['title'] === 'string' ? context['title'] as string : '影片') +
+          ' · ' + Utils.formatTime(record['positionMs'] as number);
+      } catch (e) { this.latestAdReport = ''; }
+    }
+    this.refreshAdView(true);
+  }
+
+  private markAd(): void {
+    if (this.released || !this.hasStarted || this.adMarkBusy) return;
+    if (this.adScope !== this.adScopeKey() || this.starting || this.playPending) {
+      this.toast('正在切换播放资源，请稍后标记'); return;
+    }
+    this.adMarkBusy = true;
+    try {
+      const context: AdReportContext = { sourceKey: this.sourceKey, vodId: this.vodId, title: this.title,
+        episode: this.currentEp, episodeName: this.episodeName, lineIndex: this.lineIndex };
+      const report = AdDiagnostics.report(this.adSession.current(), this.player.currentTime(), context, this.player.duration());
+      const text = JSON.stringify(report, null, 2);
+      const id = AdReportStorage.save(text);
+      if (id === '') { this.toast('广告记录保存失败，请重试'); return; }
+      this.latestAdReport = text;
+      this.adLastMark = '已记录：' + Utils.formatTime(report.positionMs) + ' · ' + id;
+      this.toast('已记录当前位置及清单快照');
+    } finally { this.adMarkBusy = false; }
+  }
+
+  private async copyAdReport(): Promise<void> {
+    if (this.latestAdReport === '') { this.toast('还没有广告标记记录'); return; }
+    try {
+      const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.latestAdReport);
+      await pasteboard.getSystemPasteboard().setData(data);
+      this.toast('已复制最近的广告诊断记录');
+    } catch (e) { this.toast('复制失败，本机记录仍保留'); }
+  }
+
+  @Builder
+  private adField(label: string, value: string) {
+    Column({ space: 5 }) {
+      Text(label).fontSize(12).fontColor('#9CAEC6').width('100%')
+      Text(value).fontSize(14).fontColor('#ECF1F8').width('100%').wordBreak(WordBreak.BREAK_ALL)
+    }.width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private adDiagnosticPanel() {
+    Stack({ alignContent: Alignment.TopEnd }) {
+      Column({ space: 12 }) {
+        Row() {
+          Text('广告诊断').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#FFFFFF').layoutWeight(1)
+          Text('关闭').fontSize(14).fontColor('#BBD9FF').padding(10).focusable(true).focusBox(TV_FOCUS)
+            .onClick(() => { this.showAdDiagnostics = false; this.scheduleHideControls(); })
+        }.width('100%')
+        Scroll() {
+          Column({ space: 14 }) {
+            this.adField('过滤实际状态', this.adView.state + '\n' + this.adView.summary)
+            this.adField('当前分片（估算）', this.adView.current)
+            this.adField('来源与文件', this.adView.location)
+            this.adField('相邻变化', this.adView.changes)
+            this.adField('保留原因', this.adView.reason)
+            Text(this.adView.note).fontSize(12).fontColor('#D4BB8E').width('100%')
+            if (this.adView.nearby.length > 0) {
+              Text('附近原清单分片').fontSize(14).fontColor('#9CAEC6').width('100%')
+              ForEach(this.adView.nearby, (row: string) => {
+                Text(row).fontSize(12).fontColor('#C7D1E1').width('100%')
+                  .padding(9).backgroundColor('#26374C').borderRadius(8)
+              }, (row: string) => row)
+            }
+          }.width('100%').padding({ right: 6, bottom: 12 }).alignItems(HorizontalAlign.Start)
+        }.width('100%').layoutWeight(1).scrollBar(BarState.Off).align(Alignment.TopStart)
+        Text(this.adLastMark).fontSize(11).fontColor('#A9BDD8').width('100%').maxLines(2)
+        Row({ space: 10 }) {
+          Button(this.adMarkBusy ? '正在记录…' : '这里有广告')
+            .fontSize(14).fontColor('#FFFFFF').backgroundColor('#875A39').layoutWeight(1)
+            .enabled(this.hasStarted && this.errorText === '' && !this.adMarkBusy)
+            .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.markAd(); })
+          Button('复制最近记录').fontSize(14).fontColor('#DCEAFF').backgroundColor('#35465D').layoutWeight(1)
+            .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.copyAdReport(); })
+        }.width('100%')
+      }.width(TvLayout.isLandscape(this.canvasW, this.canvasH) ? Math.min(560, this.canvasW * 0.52) : '94%')
+        .height(this.canvasH > 0 ? Math.max(220, this.canvasH - 160) : '76%')
+        .padding(18).backgroundColor('#F018202D').borderRadius(20)
+        .hitTestBehavior(HitTestMode.Block).margin({ top: 64, right: 18 })
+    }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
   }
 
   private loadLoudnessPreference(): void {
@@ -2046,10 +2179,11 @@ export struct PlayerPage {
   }
 
   private handleBack(): void {
-    if (this.showEpisodes || this.showSpeeds || this.showSources) {
+    if (this.showEpisodes || this.showSpeeds || this.showSources || this.showAdDiagnostics) {
       this.showEpisodes = false;
       this.showSpeeds = false;
       this.showSources = false;
+      this.showAdDiagnostics = false;
       this.controlsVisible = true;
       this.scheduleHideControls();
       return;
@@ -2240,6 +2374,10 @@ export struct PlayerPage {
                 }
                 .alignItems(HorizontalAlign.End).margin({ right: 16 })
               }
+              Text('广告诊断').fontSize(12).fontColor('#E2EBF8')
+                .padding({ left: 12, right: 12 }).height(32).textAlign(TextAlign.Center)
+                .backgroundColor('#5037475D').borderRadius(16).focusable(true).focusBox(TV_FOCUS)
+                .onClick(() => { this.openAdDiagnostics(); })
               // 收藏星标：点播播放页内即可收藏/取消，与详情页、直播页同款。
               Stack({ alignContent: Alignment.Center }) {
                 Image(this.favorite ? $r('app.media.ic_player_star_filled') : $r('app.media.ic_player_star'))
@@ -2427,6 +2565,7 @@ export struct PlayerPage {
                       .focusable(true)
                       .focusBox(TV_FOCUS)
                       .onClick(() => {
+                        this.showAdDiagnostics = false;
                         this.showEpisodes = !this.showEpisodes;
                       })
                   }
@@ -2526,6 +2665,8 @@ export struct PlayerPage {
           // 栏和底部控制条都"浮在离边一段距离的地方"，看着不像是全屏。
           .padding({ top: 0, bottom: 0 })
         }
+
+        if (this.showAdDiagnostics) this.adDiagnosticPanel()
 
         // 滑屏调节的浮层提示（音量改由系统音量面板呈现，这里只留亮度）
         if (this.adjustKind === 'brightness') {
@@ -2786,7 +2927,7 @@ export struct PlayerPage {
           .onActionStart((event: GestureEvent) => {
             if (DevicePolicy.isTV()) {
               this.tvGesture.begin(!this.controlsVisible && !this.showEpisodes && !this.showSpeeds &&
-                !this.showSources && this.hasStarted && this.errorText === '');
+                !this.showSources && !this.showAdDiagnostics && this.hasStarted && this.errorText === '');
               return;
             }
             const fingers = event.fingerList;

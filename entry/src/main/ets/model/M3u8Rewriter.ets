@@ -15,11 +15,13 @@ import { HttpClient } from '../net/HttpClient';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { Utils } from '../common/Utils';
+import { AdDiagnostics, AdFilterTrace, AdSegmentDecision } from './AdDiagnostics';
 
 export interface MediaPlaylistResult {
   content: string;
   segmentCount: number;
   filteredCount: number;
+  trace: AdFilterTrace;
 }
 
 export interface RewriteOutcome {
@@ -30,6 +32,7 @@ export interface RewriteOutcome {
   segmentCount: number;
   filteredCount: number;
   error: string;
+  trace: AdFilterTrace;
 }
 
 interface Segment {
@@ -55,15 +58,19 @@ export class M3u8Rewriter {
   ];
 
   static async rewrite(url: string, headers: Record<string, string>, mode: string, outDir: string): Promise<RewriteOutcome> {
+    let trace = AdDiagnostics.empty(mode, 'pending', url);
+    let opened: fs.File | null = null;
     try {
       // 1) 逐级解析主播放列表，选最高码率变体
       let currentUrl = url;
       let text = '';
       for (let depth = 0; depth < 4; depth++) {
         // 与下载链路保持一致：按 Referer 逐级放宽，避免 CDN 防盗链直接 403
+        trace.playlistUrl = AdDiagnostics.safeUrl(currentUrl);
         const res = await HttpClient.getTextResilient(currentUrl, 12000);
         if (!res.ok || res.text === '') {
-          return M3u8Rewriter.fail('播放列表请求失败: ' + res.error);
+          return M3u8Rewriter.fail('播放列表请求失败: ' + res.error, trace,
+            res.status > 0 ? '清单请求 HTTP ' + res.status + '；已回退原地址播放。' : '清单请求失败；已回退原地址播放。');
         }
         text = res.text;
         if (text.indexOf('#EXT-X-STREAM-INF') < 0) {
@@ -76,17 +83,19 @@ export class M3u8Rewriter {
         currentUrl = variant;
       }
       if (text === '') {
-        return M3u8Rewriter.fail('播放列表为空');
+        return M3u8Rewriter.fail('播放列表为空', trace);
       }
       // 2) 重写媒体播放列表
       const rewritten = M3u8Rewriter.rewriteMediaPlaylist(text, currentUrl, mode);
+      trace = rewritten.trace;
       if (rewritten.segmentCount === 0) {
-        return M3u8Rewriter.fail('播放列表中没有可分片的播放地址');
+        return M3u8Rewriter.fail('播放列表中没有可分片的播放地址', trace);
       }
       // 3) 写入沙箱（文件句柄保持打开，供 fd:// 播放）
       fs.mkdirSync(outDir, true);
       const localPath = outDir + '/index.m3u8';
       const file = fs.openSync(localPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      opened = file;
       const encoder = util.TextEncoder.create('utf-8');
       const bytes = encoder.encodeInto(rewritten.content);
       fs.writeSync(file.fd, bytes.buffer as ArrayBuffer);
@@ -96,15 +105,19 @@ export class M3u8Rewriter {
         file: file,
         segmentCount: rewritten.segmentCount,
         filteredCount: rewritten.filteredCount,
-        error: ''
+        error: '',
+        trace: trace
       };
     } catch (e) {
-      return M3u8Rewriter.fail('重写播放列表失败: ' + e);
+      if (opened !== null) { try { fs.closeSync(opened.fd); } catch (e) { /* Preserve direct-play fallback. */ } }
+      return M3u8Rewriter.fail('重写播放列表失败: ' + e, trace);
     }
   }
 
-  private static fail(msg: string): RewriteOutcome {
-    return { ok: false, localPath: '', file: null, segmentCount: 0, filteredCount: 0, error: msg };
+  private static fail(msg: string, trace: AdFilterTrace, note: string = ''): RewriteOutcome {
+    trace.status = 'fallback';
+    trace.note = note !== '' ? note : '清单解析或重写未成功，当前使用原地址；未应用任何剔除结果。';
+    return { ok: false, localPath: '', file: null, segmentCount: 0, filteredCount: 0, error: msg, trace: trace };
   }
 
   /** 主播放列表：选 BANDWIDTH 最大的变体 */
@@ -173,8 +186,10 @@ export class M3u8Rewriter {
 
     // 广告过滤
     const dropFlags: boolean[] = [];
+    const reasons: string[] = [];
     for (let i = 0; i < segs.length; i++) {
       dropFlags.push(false);
+      reasons.push(mode === 'off' ? '过滤已关闭' : '未命中广告路径和当前时长 / 分组规则');
     }
     let filtered = 0;
     if (mode === 'loose' || mode === 'strict') {
@@ -246,9 +261,16 @@ export class M3u8Rewriter {
                 hasAdUri = true;
               }
             }
+            for (let i = r[0]; i < r[1]; i++) reasons[i] = '未命中广告路径，分组并非全短片段或全异域' +
+              (mainCount < 3 ? '；样本不足，未启用异域分组判定' : '');
             if (allShort || allForeign || hasAdUri) {
+              const matched: string[] = [];
+              if (allShort) matched.push('分组内全部分片不足 5 秒');
+              if (allForeign) matched.push('分组全部来自其他域名');
+              if (hasAdUri) matched.push('分组含广告路径关键词');
               for (let i = r[0]; i < r[1]; i++) {
                 dropFlags[i] = true;
+                reasons[i] = matched.join('；');
               }
             }
           }
@@ -256,14 +278,16 @@ export class M3u8Rewriter {
           for (let i = 0; i < segs.length; i++) {
             if (segs[i].dur < M3u8Rewriter.TINY_SEG_DUR || isAdUri(segs[i].uri)) {
               dropFlags[i] = true;
-            }
+              reasons[i] = isAdUri(segs[i].uri) ? '命中广告路径关键词' : '无分组且时长不足 1 秒';
+            } else reasons[i] = '未命中广告路径，且时长不少于 1 秒';
           }
         }
       } else {
         for (let i = 0; i < segs.length; i++) {
           if (segs[i].dur < M3u8Rewriter.AD_SEG_MAX_DUR || isAdUri(segs[i].uri)) {
             dropFlags[i] = true;
-          }
+            reasons[i] = isAdUri(segs[i].uri) ? '命中广告路径关键词' : '严格规则：时长不足 3 秒';
+          } else reasons[i] = '时长不少于 3 秒，未命中广告路径或整组异域规则';
         }
         // strict：整组外源的 DIS 区间也丢
         if (runRanges.length > 1 && mainCount >= 3) {
@@ -278,6 +302,7 @@ export class M3u8Rewriter {
             if (allForeign) {
               for (let i = r[0]; i < r[1]; i++) {
                 dropFlags[i] = true;
+                reasons[i] = '分组全部来自其他域名';
               }
             }
           }
@@ -293,6 +318,7 @@ export class M3u8Rewriter {
       if (keptCount === 0) {
         for (let i = 0; i < dropFlags.length; i++) {
           dropFlags[i] = false;
+          reasons[i] = '保护回退：规则会删光全部分片，已全部保留（' + reasons[i] + '）';
         }
       }
       for (const d of dropFlags) {
@@ -350,7 +376,28 @@ export class M3u8Rewriter {
     if (hadEndList) {
       out.push('#EXT-X-ENDLIST');
     }
-    return { content: out.join('\n'), segmentCount: kept, filteredCount: filtered };
+    const trace = AdDiagnostics.empty(mode, 'rewritten', baseUrl);
+    trace.originalCount = segs.length;
+    trace.filteredCount = filtered;
+    trace.live = !hadEndList;
+    trace.timelineUsable = segs.length > 0 && segs.length <= 20000;
+    let sourceMs = 0; let outputMs = 0; let group = 1;
+    for (let i = 0; i < Math.min(segs.length, 20000); i++) {
+      const segment = segs[i];
+      const discontinuity = segment.tags.some((tag: string) => tag === '#EXT-X-DISCONTINUITY');
+      if (i > 0 && discontinuity) group++;
+      const duration = Number.isFinite(segment.dur) && segment.dur > 0 ? Math.round(segment.dur * 1000) : 0;
+      if (duration <= 0) trace.timelineUsable = false;
+      const url = AdDiagnostics.safeUrl(Utils.resolveUrl(baseUrl, segment.uri));
+      const decision: AdSegmentDecision = { index: i + 1, group: group, durationMs: duration,
+        sourceStartMs: sourceMs, startMs: outputMs, endMs: outputMs + (dropFlags[i] ? 0 : duration),
+        url: url, host: Utils.hostnameOf(url), discontinuity: discontinuity, dropped: dropFlags[i], reason: reasons[i] };
+      trace.segments.push(decision);
+      sourceMs += duration;
+      if (dropFlags[i]) trace.filteredMs += duration;
+      else outputMs += duration;
+    }
+    return { content: out.join('\n'), segmentCount: kept, filteredCount: filtered, trace: trace };
   }
 
   /** 重写标签中的 URI="..." 为绝对地址 */

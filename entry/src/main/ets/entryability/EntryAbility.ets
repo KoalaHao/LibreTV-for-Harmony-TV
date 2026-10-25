@@ -8,6 +8,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Store } from '../data/Store';
 import { SearchCacheStorage } from '../data/SearchCacheStorage';
+import { AdReportStorage } from '../data/AdReportStorage';
 import { SourceManager } from '../data/SourceManager';
 import { DownloadManager } from '../data/DownloadManager';
 import { SettingsStore } from '../data/SettingsStore';
@@ -27,6 +28,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(0x0001, 'LibreTV', 'EntryAbility onCreate');
     Store.shared().init(this.context);
     SearchCacheStorage.init(this.context.filesDir);
+    AdReportStorage.init(this.context.filesDir);
     // 冷启动可能正是被分享链接拉起来的：先收下，等首页挂载后由 DeepLink 补发
     ContinuationService.bind(this.context);
     this.handleLaunch(want, launchParam);
