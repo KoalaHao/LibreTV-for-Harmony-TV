@@ -1,0 +1,453 @@
+{
+  "checkedAt": "2026-10-25",
+  "sdk": "HarmonyOS 26.0.0.105",
+  "source": "hms/ets/api/device-define/api-version/*.json",
+  "capabilities": {
+    "IntentsKit": {
+      "totalRecords": 24,
+      "tvRecords": 0,
+      "fileRecords": [
+        {
+          "apiText": "@hms.ai.insightIntent.InsightIntentUIExtensionAbility.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.insightIntent.InsightIntentUIExtensionAbility.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.InsightIntent",
+          "OS": "HarmonyOS",
+          "kit": "IntentsKit",
+          "kitEnName": "Intents Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.insightIntent.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.insightIntent.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.InsightIntent",
+          "OS": "HarmonyOS",
+          "kit": "IntentsKit",
+          "kitEnName": "Intents Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "4.0.0(10)"
+        }
+      ]
+    },
+    "CoreSpeechKit": {
+      "totalRecords": 113,
+      "tvRecords": 0,
+      "fileRecords": [
+        {
+          "apiText": "@hms.ai.speechRecognizer.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.speechRecognizer.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.SpeechRecognizer",
+          "OS": "HarmonyOS",
+          "kit": "CoreSpeechKit",
+          "kitEnName": "Core Speech Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "4.1.0(11)"
+        },
+        {
+          "apiText": "@hms.ai.textToSpeech.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.textToSpeech.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.TextToSpeech",
+          "OS": "HarmonyOS",
+          "kit": "CoreSpeechKit",
+          "kitEnName": "Core Speech Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "4.1.0(11)"
+        }
+      ]
+    },
+    "SpeechKit": {
+      "totalRecords": 207,
+      "tvRecords": 0,
+      "fileRecords": [
+        {
+          "apiText": "@hms.ai.AICaption.d.ets",
+          "apiType": "file",
+          "file": "api/@hms.ai.AICaption.d.ets",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.AICaption",
+          "OS": "HarmonyOS",
+          "kit": "SpeechKit",
+          "kitEnName": "Speech Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.textReader.d.ets",
+          "apiType": "file",
+          "file": "api/@hms.ai.textReader.d.ets",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Component.TextReader",
+          "OS": "HarmonyOS",
+          "kit": "SpeechKit",
+          "kitEnName": "Speech Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        }
+      ]
+    },
+    "NaturalLanguageKit": {
+      "totalRecords": 28,
+      "tvRecords": 0,
+      "fileRecords": [
+        {
+          "apiText": "@hms.ai.nlp.textProcessing.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.nlp.textProcessing.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.NaturalLanguage.TextProcessing",
+          "OS": "HarmonyOS",
+          "kit": "NaturalLanguageKit",
+          "kitEnName": "Natural Language Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        }
+      ]
+    },
+    "CoreVisionKit": {
+      "totalRecords": 227,
+      "tvRecords": 0,
+      "fileRecords": [
+        {
+          "apiText": "@hms.ai.face.faceComparator.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.face.faceComparator.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Face.Comparator",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.face.faceDetector.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.face.faceDetector.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Face.Detector",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.ocr.textRecognition.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.ocr.textRecognition.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.OCR.TextRecognition",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "4.0.0(10)"
+        },
+        {
+          "apiText": "@hms.ai.vision.imageSuperResolution.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.vision.imageSuperResolution.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Vision.VisionBase",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "26.0.0"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "26.0.0"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "26.0.0"
+            }
+          ],
+          "since": "26.0.0"
+        },
+        {
+          "apiText": "@hms.ai.vision.objectDetection.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.vision.objectDetection.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Vision.ObjectDetection",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.vision.skeletonDetection.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.vision.skeletonDetection.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Vision.SkeletonDetection",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.vision.subjectSegmentation.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.vision.subjectSegmentation.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Vision.SubjectSegmentation",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        },
+        {
+          "apiText": "@hms.ai.vision.textSearchImage.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.vision.textSearchImage.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Vision.VisionBase",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "26.0.0"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "26.0.0"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "26.0.0"
+            }
+          ],
+          "since": "26.0.0"
+        },
+        {
+          "apiText": "@hms.ai.vision.visionBase.d.ts",
+          "apiType": "file",
+          "file": "api/@hms.ai.vision.visionBase.d.ts",
+          "className": "uname",
+          "isSystemApi": "false",
+          "syscap": "SystemCapability.AI.Vision.VisionBase",
+          "OS": "HarmonyOS",
+          "kit": "CoreVisionKit",
+          "kitEnName": "Core Vision Kit",
+          "deviceTypes": [
+            {
+              "deviceType": "phone",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "tablet",
+              "since": "5.0.0(12)"
+            },
+            {
+              "deviceType": "2in1",
+              "since": "5.0.1(13)"
+            }
+          ],
+          "since": "5.0.0(12)"
+        }
+      ]
+    }
+  }
+}
