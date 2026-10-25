@@ -2,12 +2,28 @@
 
 调查日期：2026-10-25。依据华为官方文档、OpenHarmony 官方接口说明及本机 HarmonyOS 26.0.0.105 SDK。当前兼容基线为 API 24。本次没有连接或查询电视；下表的“已实现”指代码与编译结果，实际机型效果待验证。
 
+## 官方专门指南与结论修正
+
+现已核实有官方智慧屏专门开发指南，之前检索遗漏，不能再表述为“未找到 Mate TV 专门开发文档”。以下三篇作为项目后续适配依据：
+
+- [智慧屏应用开发](https://developer.huawei.com/consumer/cn/doc/doccenter-multi-device/bpta-matetv-guide)：以 Mate TV 为例，说明硬件、灵犀遥控、应用接续及适配差异。
+- [沉浸光感](https://developer.huawei.com/consumer/cn/doc/doccenter-advanced-features/bpta-spatiality-immersive)：UI 材质与导航实践，属于通用视觉能力。其组件级 systemMaterial 示例要求 target API 26，并建议检查可用材质后降级，不能直接用于当前 API 24 基线。
+- [智慧屏设计](https://developer.huawei.com/consumer/cn/doc/doccenter-ux-design/vision-0000002321377950)：推荐视频 / 音乐等内容应用使用沉浸布局，并分别考虑指针和焦点交互。
+
+专门指南明确灵犀遥控的方向键归一为 PanGesture；OK、返回、Home 等有系统默认行为，不响应 onKeyEvent。onHover / onClick / PanGesture 是主要输入通道。因此原先的“TV 方向键统一作为 DPAD”说明不准确。1.10.0-tv.3 补上视频手势路径、菜单键与悬停反馈；DPAD 仅作为键盘等设备的补充，返回仍走页面返回处理。
+
+指南给出的屏幕规格是固定横屏、1280×720 vp / 3840×2160 px；电视仅支持深色模式。本版使用实际窗口尺寸布局，并固定电视深色主题。无线调试文档中的 5555 示例不替代设备实际报告的调试端口。List 的 fadingEdge 在 TV 上还有裁剪、overlay / blendMode 和截屏限制，涉及列表视觉改造时需单独核对。
+
+系统未成年人模式是另一个可用方向：指南提供 Account Kit 的 minorsProtection 接入路线，本机 SDK 的相关接口也列出 TV API 19 支持。当前应用的成人内容过滤仍是本地设置，尚未接入系统未成年人状态或家长验证，不能宣称已支持系统联动。
+
+这三篇没有提供面向普通应用的鸿鹄芯片 / MEMC 控制接口。公开 AVPlayer 超分的依据仍是 Media Kit 声明与 TV 设备支持矩阵，实际生效及硬件链路仍待验证。
+
 ## 当前可接入的能力
 
 | 能力 | 接入方式 | 本版状态与边界 |
 | --- | --- | --- |
-| 遥控器方向键 / 确认 / 返回 | ArkUI 焦点、KeyEvent、NavDestination.onBackPressed、入口 onBackPress | 已实现主要点播路径；需实机检查焦点可达性和系统返回键分发 |
-| 灵犀指向遥控 / 悬浮触控 | 保留原生 onClick、滑动和系统命中测试，配合更大的选集点击区域 | 保留已有指针交互，并加入方向键操作；未调用私有 UWB 接口，未验证触控附件 |
+| 遥控 / 键盘 / 返回 | 灵犀方向归一化 PanGesture、onClick；键盘 KeyEvent / 焦点；页面返回回调 | 已适配输入路径，实际硬件分发、滚动竞争及返回仍待验证 |
+| 灵犀指向遥控 / 悬浮触控 | onHover / onClick / PanGesture 与系统命中测试 | 卡片、选集和设置行补上悬停反馈；未调用私有 UWB 接口，附件效果待验证 |
 | 公开视频超分 | PlaybackStrategy.enableSuperResolution + superResolutionChanged | 点播已接入；电视默认请求，可在设置关闭；仅系统回调 true 才显示生效 |
 | 系统媒体播控 | AVSession 的 play / pause / seek / playNext / playPrevious | 点播已响应并同步媒体状态；不承诺等同于完整小艺搜片接入 |
 | HDR / 设备解码能力 | 保留 AVPlayer → XComponent(SURFACE) 原生视频路径 | 不把帧读回 UI，不强行用仅支持 SDR 的细节增强流程处理 HDR；当前未新增 HDR 状态检测或画质开关 |
