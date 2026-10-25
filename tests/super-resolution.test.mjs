@@ -31,14 +31,14 @@ function mockPlayer({ srListener = true, srSource = true, fatalSource = false } 
     release() { this.state = 'released'; }
   };
 }
-async function setup(options, enabled = true) {
+async function setup(options, enabled = true, allowRuntimeToggle = enabled) {
   const native = mockPlayer(options);
   players.push(native);
   const controller = new AvPlayerController();
   const states = [], errors = [];
   controller.onSuperResolutionState = s => states.push(s);
   controller.onError = e => errors.push(e);
-  controller.configureSuperResolution(enabled);
+  controller.configureSuperResolution(enabled, allowRuntimeToggle);
   assert.equal(await controller.create('surface'), true);
   return { native, controller, states, errors };
 }
@@ -118,4 +118,120 @@ test('paused continuation prepares and seeks precisely without emitting play; no
     assert.equal(calls.filter(c => c[0] === 'play').length, autoplay ? 1 : 0);
     assert.equal(native.strategies[0].showFirstFrameOnPrepare, true);
   }
+});
+
+test('source metadata uses selected video track and converts SDK frame-rate units', () => {
+  const audio = { track_type: 0, track_index: 0, codec_mime: 'audio/mp4a-latm', bitrate: 128000 };
+  const low = { track_type: 1, track_index: 1, width: 1280, height: 720, frame_rate: 2500, codec_mime: 'video/avc', bitrate: 2500000 };
+  const high = { track_type: 1, track_index: 2, width: 1920, height: 1080, frame_rate: 2997, codec_mime: 'video/hevc' };
+  assert.deepEqual(AvPlayerController.sourceVideoInfo([audio, low, high], [0, 2]),
+    { width: 1920, height: 1080, fps: 29.97, codec: 'video/hevc', bitrate: 0 });
+  assert.equal(AvPlayerController.sourceVideoInfo([audio, low], []).fps, 25);
+  assert.deepEqual(AvPlayerController.sourceVideoInfo([low, high], []), AvPlayerController.emptyVideoInfo());
+  assert.equal(AvPlayerController.sourceVideoInfo([{ ...low, width: NaN, bitrate: -1 }], []).width, 0);
+});
+
+test('source changes clear old metadata and released players cannot publish late track data', async () => {
+  const { native, controller } = await setup({}, false);
+  const info = [];
+  controller.onVideoInfo = v => info.push(v);
+  let resolveTracks;
+  native.getTrackDescription = () => new Promise(resolve => { resolveTracks = resolve; });
+  native.getSelectedTracks = async () => [1];
+  native.setVolume = () => {};
+  await controller.playUrl('https://example.test/one.m3u8', {});
+  native.state = 'prepared';
+  native.listeners.get('stateChange')('prepared');
+  controller.release();
+  resolveTracks([{ track_type: 1, track_index: 1, width: 1280, height: 720, frame_rate: 2500 }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(info, [AvPlayerController.emptyVideoInfo()]);
+});
+
+test('TV Off preference disables SR before prepare, then toggles the same stream without reset', async () => {
+  const { native, controller, states } = await setup({}, false, true);
+  const toggles = [];
+  native.setSuperResolution = async enabled => {
+    if (toggles.length === 0) assert.notEqual(native.prepared, true);
+    toggles.push(enabled);
+  };
+  await controller.playUrl('https://example.test/ab.mp4', {}, 42000);
+  assert.equal(native.strategies[0].enableSuperResolution, true);
+  assert.deepEqual(toggles, [false]);
+  native.state = 'playing';
+  assert.equal(await controller.setSuperResolution(true), true);
+  assert.equal(states.at(-1), 'enabled'); // Accepted command, with no new algorithm-state callback.
+  native.listeners.get('superResolutionChanged')(true);
+  assert.equal(states.at(-1), 'active');
+  assert.equal(await controller.setSuperResolution(false), true);
+  native.listeners.get('superResolutionChanged')(false);
+  assert.equal(states.at(-1), 'off');
+  assert.deepEqual(toggles, [false, true, false]);
+  assert.equal(native.strategies.length, 1);
+  assert.equal(native.state, 'playing');
+});
+
+test('SR switch rejection does not turn into a playback error or claim it succeeded', async () => {
+  const { native, controller, states, errors } = await setup();
+  native.state = 'playing';
+  native.setSuperResolution = async () => { throw { code: 5410003 }; };
+  assert.equal(await controller.setSuperResolution(false), false);
+  assert.equal(states.at(-1), 'unavailable');
+  assert.equal(native.state, 'playing');
+  assert.deepEqual(errors, []);
+});
+
+test('when initial SR disable is unsupported, saved Off restarts preparation without the feature', async () => {
+  const { native, controller, states } = await setup({}, false, true);
+  native.setSuperResolution = async () => { throw { code: 5410004 }; };
+  assert.equal(await controller.playUrl('https://example.test/plain.mp4', {}), true);
+  assert.deepEqual(native.strategies.map(s => !!s.enableSuperResolution), [true, false]);
+  assert.equal(native.prepared, true);
+  assert.equal(states.at(-1), 'off');
+});
+
+test('native SR callback during the toggle remains authoritative over successful command completion', async () => {
+  const { native, controller, states } = await setup();
+  native.state = 'playing';
+  native.setSuperResolution = async enabled => native.listeners.get('superResolutionChanged')(enabled);
+  assert.equal(await controller.setSuperResolution(true), true);
+  assert.equal(states.at(-1), 'active');
+  assert.equal(await controller.setSuperResolution(false), true);
+  assert.equal(states.at(-1), 'off');
+});
+
+test('missing runtime callback reparses the same source at the exact position and preserves paused/playing state', async () => {
+  globalThis.__testMedia.SeekMode = { SEEK_CLOSEST: 2, SEEK_PREV_SYNC: 0 };
+  for (const playing of [true, false]) {
+    const { native, controller } = await setup();
+    const calls = [];
+    native.setSuperResolution = async () => {};
+    native.setVolume = () => {};
+    native.seek = (position, mode) => calls.push(['seek', position, mode]);
+    native.play = () => calls.push(['play']);
+    native.currentTime = 42420;
+    native.duration = 900000;
+    await controller.playUrl('https://example.test/same-source.mp4', {});
+    native.state = playing ? 'playing' : 'paused';
+    assert.equal(await controller.setSuperResolution(true, true), true);
+    assert.equal(native.strategies.length, 2);
+    native.state = 'prepared';
+    native.listeners.get('stateChange')('prepared');
+    assert.deepEqual(calls[0], ['seek', 42420, 2]);
+    assert.equal(calls.filter(c => c[0] === 'play').length, playing ? 1 : 0);
+  }
+});
+
+test('paused seek completion publishes the restored position without waiting for a playback timeUpdate', async () => {
+  const { native, controller } = await setup();
+  const positions = [];
+  controller.onProgress = (position, duration) => positions.push([position, duration]);
+  native.listeners.get('durationUpdate')(900000);
+  native.state = 'paused';
+  native.listeners.get('timeUpdate')(0);
+  native.listeners.get('seekDone')(42420);
+  assert.deepEqual(positions.at(-1), [42420, 900000]);
+  controller.release();
+  native.listeners.get('seekDone')(99999);
+  assert.deepEqual(positions.at(-1), [42420, 900000]);
 });

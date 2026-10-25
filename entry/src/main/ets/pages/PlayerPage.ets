@@ -11,7 +11,7 @@ import { TV_FOCUS } from '../common/TvFocus';
 import { BackNavigation } from '../common/BackNavigation';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { window, PiPWindow, promptAction } from '@kit.ArkUI';
-import { AvPlayerController, PlaybackSpeedOption } from '../player/AvPlayerController';
+import { AvPlayerController, PlaybackSpeedOption, VideoStreamInfo } from '../player/AvPlayerController';
 import { DevicePolicy } from '../common/DevicePolicy';
 import { audio, AVVolumePanel } from '@kit.AudioKit';
 import { AVCastPicker, AVCastPickerStyle, AVCastPickerColorMode, avSession } from '@kit.AVSessionKit';
@@ -121,6 +121,9 @@ export struct PlayerPage {
   /** 点播收藏态：顶部栏星标按钮的实/空心 */
   @State favorite: boolean = false;
   @State superResolutionState: string = 'off';
+  @State private sourceVideoInfo: VideoStreamInfo = AvPlayerController.emptyVideoInfo();
+  @State private qualityEnabled: boolean = SettingsStore.shared().get().superResolution;
+  @State private qualityBusy: boolean = false;
   @State showEpisodes: boolean = false;
   @State showSpeeds: boolean = false;
   @State showSources: boolean = false;
@@ -455,7 +458,9 @@ export struct PlayerPage {
     // release() 里把常亮、投播会话、前后台回调都交还了，重新进入必须再拿回来
     this.holdScreen();
     this.settings = SettingsStore.shared().get();
-    this.player.configureSuperResolution(DevicePolicy.isTV() && this.settings.superResolution);
+    this.qualityEnabled = this.settings.superResolution;
+    this.qualityBusy = false;
+    this.player.configureSuperResolution(DevicePolicy.isTV() && this.qualityEnabled, DevicePolicy.isTV());
     this.speedValue = this.initialSpeed > 0 ? this.initialSpeed : this.settings.defaultSpeed;
     this.player.configureAutoPlay(this.playWhenReady, this.initialSpeed > 0);
     this.syncSystemVolume();
@@ -506,7 +511,7 @@ export struct PlayerPage {
     this.player.onSuperResolutionState = (state: string) => {
       this.superResolutionState = state;
     };
-    this.player.configureSuperResolution(DevicePolicy.isTV() && this.settings.superResolution);
+    this.player.configureSuperResolution(DevicePolicy.isTV() && this.qualityEnabled, DevicePolicy.isTV());
     this.player.onPrepared = (durationMs: number) => {
       this.durationMs = durationMs;
       this.durationText = Utils.formatTime(durationMs);
@@ -621,6 +626,9 @@ export struct PlayerPage {
           // 非画中画态调用会抛错，忽略
         }
       }
+    };
+    this.player.onVideoInfo = (info: VideoStreamInfo) => {
+      if (!this.released) this.sourceVideoInfo = info;
     };
     this.player.onBufferState = (buffering: boolean) => {
       // 只对离线播放启用：本地读盘不该出现长时间缓冲，
@@ -1954,9 +1962,45 @@ export struct PlayerPage {
   private superResolutionLabel(): string {
     if (this.superResolutionState === 'active') return '视频超分：生效中';
     if (this.superResolutionState === 'requesting') return '视频超分：等待系统确认';
+    if (this.superResolutionState === 'enabled') return '视频超分：已开启 · 系统未回报状态';
+    if (this.superResolutionState === 'disabling') return '视频超分：正在关闭';
     if (this.superResolutionState === 'unavailable') return '视频超分：设备暂不支持';
     if (this.superResolutionState === 'inactive') return '视频超分：当前未生效';
     return '视频超分：已关闭';
+  }
+
+  private async toggleTvQuality(): Promise<void> {
+    if (this.qualityBusy || !this.hasStarted || this.released) return;
+    this.qualityBusy = true;
+    const enabled = !this.qualityEnabled;
+    const changed = await this.player.setSuperResolution(enabled, true);
+    if (this.released) return;
+    if (changed) {
+      this.qualityEnabled = enabled;
+      SettingsStore.shared().update({ superResolution: enabled });
+    } else {
+      this.toast('当前视频暂时无法切换超分');
+    }
+    this.qualityBusy = false;
+    this.controlsVisible = true;
+    this.scheduleHideControls();
+  }
+
+  private sourceVideoLabel(): string {
+    const info = this.sourceVideoInfo;
+    if (info.width <= 0 || info.height <= 0) return '原片分辨率：未提供';
+    let label = '原片 ' + info.width.toString() + ' × ' + info.height.toString();
+    if (info.fps > 0) label += ' · ' + Number(info.fps.toFixed(2)).toString() + ' fps';
+    return label;
+  }
+
+  private sourceCodecLabel(): string {
+    const info = this.sourceVideoInfo;
+    let codec = info.codec.replace('video/', '');
+    if (codec === 'avc') codec = 'H.264';
+    else if (codec === 'hevc') codec = 'H.265';
+    if (info.bitrate > 0) codec += (codec !== '' ? ' · ' : '') + (info.bitrate / 1000000).toFixed(2) + ' Mbps';
+    return codec;
   }
 
   private handleBack(): void {
@@ -2142,11 +2186,17 @@ export struct PlayerPage {
               .layoutWeight(1)
               .alignItems(HorizontalAlign.Start)
               if (DevicePolicy.isTV()) {
-                Text(this.superResolutionLabel())
-                  .fontSize(14)
-                  .fontColor('#DDDDDD')
-                  .maxLines(1)
-                  .margin({ right: 16 })
+                Column({ space: 3 }) {
+                  Text(this.sourceVideoLabel()).fontSize(14).fontColor('#F1F3F8').maxLines(1)
+                  Row({ space: 10 }) {
+                    if (this.sourceCodecLabel() !== '') {
+                      Text(this.sourceCodecLabel()).fontSize(12).fontColor('#BBC3D0').maxLines(1)
+                    }
+                    Text(this.superResolutionLabel()).fontSize(12)
+                      .fontColor(this.superResolutionState === 'active' ? '#90E8B3' : '#BBC3D0').maxLines(1)
+                  }
+                }
+                .alignItems(HorizontalAlign.End).margin({ right: 16 })
               }
               // 收藏星标：点播播放页内即可收藏/取消，与详情页、直播页同款。
               Stack({ alignContent: Alignment.Center }) {
@@ -2288,6 +2338,16 @@ export struct PlayerPage {
                   .maxLines(1)
                   .layoutWeight(1)
                 Row({ space: 6 }) {
+                  if (DevicePolicy.isTV()) {
+                    Text(this.qualityBusy ? '鸿鹄画质 · 切换中' : ('鸿鹄画质 · ' + (this.qualityEnabled ? '开' : '关')))
+                      .fontSize(13).fontColor(this.qualityEnabled ? '#A8EBC3' : '#FFFFFF')
+                      .backgroundColor(this.qualityEnabled ? '#38439165' : '#26FFFFFF')
+                      .borderRadius(15).height(30).padding({ left: 13, right: 13 })
+                      .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS)
+                      .enabled(!this.qualityBusy && this.hasStarted && this.errorText === '')
+                      .accessibilityText('鸿鹄画质，系统视频超分，' + (this.qualityEnabled ? '开启' : '关闭'))
+                      .onClick(() => { this.toggleTvQuality(); })
+                  }
                   // 原来是无内边距的 12sp 纯文字，手指很难点中；
                   // 改成 34vp 高的胶囊按钮，点选区域和视觉层次都更清楚。
                   Text(this.speedLabel())

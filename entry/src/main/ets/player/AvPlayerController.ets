@@ -16,11 +16,21 @@ export interface PlaybackSpeedOption {
   value: number;
 }
 
+export interface VideoStreamInfo {
+  width: number;
+  height: number;
+  fps: number;
+  codec: string;
+  bitrate: number;
+}
+
 export class AvPlayerController {
   private player: media.AVPlayer | null = null;
   private surfaceId: string = '';
   /** 准备完成后要跳转到的位置（续播） */
   private pendingSeekMs: number = 0;
+  private pendingSeekPrecise: boolean = false;
+  private currentSource: media.MediaSource | null = null;
   private prepared: boolean = false;
   private wantPlay: boolean = false;
   private autoPlay: boolean = true;
@@ -40,12 +50,99 @@ export class AvPlayerController {
    */
   private volume: number = 1.0;
   private superResolution: boolean = false;
+  private superResolutionFeature: boolean = false;
+  private superResolutionActive: boolean = false;
+  private superResolutionEventSerial: number = 0;
   private superResolutionAvailable: boolean = true;
   onSuperResolutionState: (state: string) => void = () => {};
+  onVideoInfo: (info: VideoStreamInfo) => void = () => {};
+  private sourceGeneration: number = 0;
+  private infoReadId: number = 0;
 
-  configureSuperResolution(enabled: boolean): void {
+  static emptyVideoInfo(): VideoStreamInfo {
+    return { width: 0, height: 0, fps: 0, codec: '', bitrate: 0 };
+  }
+
+  /** Track metadata describes the source, independently of the enhanced Surface size. */
+  static sourceVideoInfo(tracks: media.MediaDescription[], selected: number[]): VideoStreamInfo {
+    const videos = tracks.filter((track: media.MediaDescription) => track['track_type'] === 1);
+    let track: media.MediaDescription | undefined = videos.find((item: media.MediaDescription) => {
+      return selected.indexOf(item['track_index'] as number) >= 0;
+    });
+    if (track === undefined && videos.length === 1) track = videos[0];
+    if (track === undefined) return AvPlayerController.emptyVideoInfo();
+    const numberValue = (key: string): number => {
+      const value = track![key];
+      return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+    };
+    const mime = track['codec_mime'];
+    return { width: numberValue('width'), height: numberValue('height'),
+      // MediaDescriptionKey.MD_KEY_FRAME_RATE is frames per 100 seconds, not fps.
+      fps: numberValue('frame_rate') / 100,
+      codec: typeof mime === 'string' ? mime : '', bitrate: numberValue('bitrate') };
+  }
+
+  private async readVideoInfo(player: media.AVPlayer): Promise<void> {
+    const generation = this.sourceGeneration;
+    const readId = ++this.infoReadId;
+    try {
+      const tracks = await player.getTrackDescription();
+      let selected: number[] = [];
+      try { selected = await player.getSelectedTracks(); } catch (e) { /* Single-track sources remain unambiguous. */ }
+      if (this.player !== player || generation !== this.sourceGeneration || readId !== this.infoReadId) return;
+      this.onVideoInfo(AvPlayerController.sourceVideoInfo(tracks, selected));
+    } catch (e) {
+      // Missing metadata is not a playback error. Never display a guessed source size.
+    }
+  }
+
+  configureSuperResolution(enabled: boolean, allowRuntimeToggle: boolean = enabled): void {
     this.superResolution = enabled;
+    this.superResolutionFeature = enabled || allowRuntimeToggle;
     this.onSuperResolutionState(enabled ? 'requesting' : 'off');
+  }
+
+  /** Change the current stream without changing its position, speed or play/pause state. */
+  async setSuperResolution(enabled: boolean, confirmAfterMissingCallback: boolean = false): Promise<boolean> {
+    const player = this.player;
+    if (player === null || !this.superResolutionFeature || !this.superResolutionAvailable ||
+      !['initialized', 'prepared', 'playing', 'paused', 'completed', 'stopped'].includes(player.state)) return false;
+    const generation = this.sourceGeneration;
+    const eventSerial = this.superResolutionEventSerial;
+    const previous = this.superResolution;
+    this.superResolution = enabled;
+    this.onSuperResolutionState(enabled ? 'requesting' : 'disabling');
+    try {
+      await player.setSuperResolution(enabled);
+      if (this.player !== player || generation !== this.sourceGeneration) return false;
+      if (!enabled) this.onSuperResolutionState('off');
+      else if (eventSerial === this.superResolutionEventSerial) {
+        this.onSuperResolutionState('enabled');
+        if (confirmAfterMissingCallback) {
+          await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 350); });
+          if (this.player !== player || generation !== this.sourceGeneration) return false;
+          const source = this.currentSource;
+          if (eventSerial === this.superResolutionEventSerial && source !== null &&
+            (player.state === 'playing' || player.state === 'paused' || player.state === 'prepared')) {
+            const position = player.currentTime > 0 ? player.currentTime : 0;
+            const playing = player.state === 'playing';
+            return await this.startSource(player, source, position, playing, true);
+          }
+        }
+      }
+      // Enabling is confirmed only by superResolutionChanged(true), never by Promise fulfillment.
+      return true;
+    } catch (e) {
+      if (this.player !== player || generation !== this.sourceGeneration) return false;
+      this.superResolution = previous;
+      const error = e as BusinessError;
+      if (error.code === 5410003 || error.code === 5410004) {
+        this.onSuperResolutionState('unavailable');
+      } else {
+        this.onSuperResolutionState(previous ? (this.superResolutionActive ? 'active' : 'inactive') : 'off');
+      }
+      return false;
+    }
   }
 
 
@@ -175,7 +272,13 @@ export class AvPlayerController {
   }
 
   /** 设置媒体源 → 等 initialized → 绑 Surface → prepare（顺序错会导致卡死无画面） */
-  private async startSource(player: media.AVPlayer, source: media.MediaSource, seekMs: number): Promise<boolean> {
+  private async startSource(player: media.AVPlayer, source: media.MediaSource, seekMs: number,
+    playWhenReady: boolean = this.autoPlay, preciseSeek: boolean = this.preciseResume): Promise<boolean> {
+    this.sourceGeneration++;
+    this.infoReadId++;
+    this.currentSource = null;
+    this.onVideoInfo(AvPlayerController.emptyVideoInfo());
+    this.superResolutionActive = false;
     let p: media.AVPlayer = player;
     let idle: boolean = await this.ensureIdle(p);
     if (!idle) {
@@ -195,10 +298,11 @@ export class AvPlayerController {
       }
     }
     this.prepared = false;
-    this.wantPlay = this.autoPlay;
+    this.wantPlay = playWhenReady;
     this.pendingSeekMs = seekMs > 0 ? seekMs : 0;
-    const requestSR = this.superResolution && this.superResolutionAvailable;
-    this.onSuperResolutionState(requestSR ? 'requesting' : (this.superResolution ? 'unavailable' : 'off'));
+    this.pendingSeekPrecise = preciseSeek;
+    const requestSR = this.superResolutionFeature && this.superResolutionAvailable;
+    this.onSuperResolutionState(this.superResolution ? (requestSR ? 'requesting' : 'unavailable') : 'off');
     const strategy: media.PlaybackStrategy = { preferredBufferDuration: 20, showFirstFrameOnPrepare: true };
     if (requestSR) strategy.enableSuperResolution = true;
     try {
@@ -227,6 +331,15 @@ export class AvPlayerController {
       return false;
     }
     this.bindSurface(p);
+    if (requestSR && this.superResolutionAvailable && !this.superResolution) {
+      // The feature must exist before prepare for instant A/B toggles later.
+      // Disable processing before prepare, so a saved Off preference produces no enhanced frames.
+      try { await p.setSuperResolution(false); } catch (e) {
+        this.superResolutionAvailable = false;
+        return this.startSource(p, source, seekMs, playWhenReady, preciseSeek);
+      }
+    }
+    this.currentSource = source;
     p.prepare();
     return true;
   }
@@ -261,10 +374,14 @@ export class AvPlayerController {
       return;
     }
     this.eventsBound = true;
-    if (this.superResolution) {
+    if (this.superResolutionFeature) {
       try {
         player.on('superResolutionChanged', (enabled: boolean) => {
-          if (this.player === player) this.onSuperResolutionState(enabled ? 'active' : 'inactive');
+          if (this.player === player) {
+            this.superResolutionActive = enabled;
+            this.superResolutionEventSerial++;
+            this.onSuperResolutionState(this.superResolution ? (enabled ? 'active' : 'inactive') : 'off');
+          }
         });
       } catch (e) {
         this.superResolutionAvailable = false;
@@ -281,6 +398,7 @@ export class AvPlayerController {
           this.prepared = true;
           this.lastDurationMs = player.duration > 0 ? player.duration : 0;
           this.bindSurface(player);
+          this.readVideoInfo(player);
           try {
             // 起播时补上页面里调过的音量（换源/重连后也不会被冲回 1.0）
             player.setVolume(this.volume);
@@ -292,7 +410,7 @@ export class AvPlayerController {
             const target = this.pendingSeekMs;
             this.pendingSeekMs = 0;
             try {
-              player.seek(target, this.preciseResume ? media.SeekMode.SEEK_CLOSEST : media.SeekMode.SEEK_PREV_SYNC);
+              player.seek(target, this.pendingSeekPrecise ? media.SeekMode.SEEK_CLOSEST : media.SeekMode.SEEK_PREV_SYNC);
             } catch (e) {
               // seek 失败不阻塞播放
             }
@@ -319,7 +437,7 @@ export class AvPlayerController {
       }
     });
     player.on('error', (err: BusinessError) => {
-      if (this.superResolution && (err.code === 5410003 || err.code === 5410004)) {
+      if (this.superResolutionFeature && (err.code === 5410003 || err.code === 5410004)) {
         this.superResolutionAvailable = false;
         this.onSuperResolutionState('unavailable');
         // A nonfatal algorithm rejection must not hide an otherwise playing video.
@@ -338,7 +456,16 @@ export class AvPlayerController {
     player.on('timeUpdate', (time: number) => {
       this.onProgress(time, this.lastDurationMs);
     });
+    player.on('seekDone', (time: number) => {
+      // Paused prepare/seek does not emit a later timeUpdate until playback resumes.
+      if (this.player === player && Number.isFinite(time) && time >= 0) {
+        this.onProgress(time, this.lastDurationMs);
+      }
+    });
     player.on('videoSizeChange', (width: number, height: number) => {
+      if (this.player === player && (player.state === 'prepared' || player.state === 'playing' || player.state === 'paused')) {
+        this.readVideoInfo(player);
+      }
       if (width > 0 && height > 0) {
         this.onVideoSize(width, height);
       }
@@ -630,6 +757,9 @@ export class AvPlayerController {
 
   /** 释放播放器（页面销毁时调用） */
   release(): void {
+    this.sourceGeneration++;
+    this.infoReadId++;
+    this.currentSource = null;
     const player = this.player;
     this.player = null;
     this.prepared = false;
