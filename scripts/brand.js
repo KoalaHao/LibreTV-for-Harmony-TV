@@ -36,7 +36,7 @@ const BUILD_PROFILE = path.join(ROOT, 'build-profile.json5');
 const LOCAL_BRAND_FILE = path.join(__dirname, '.brand-local.json');
 
 /** 公开构建用的品牌名。公开仓库里只会出现这一个。 */
-const PUBLIC_BRAND = 'LibreTV';
+const PUBLIC_BRAND = 'LibreTV for Harmony TV';
 
 /** 读本地品牌名；文件缺失、字段缺失、内容为空都返回空串 */
 function readLocalBrand() {

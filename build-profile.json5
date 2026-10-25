@@ -1,35 +1,13 @@
 {
   "app": {
-    /*
-     * 签名配置说明（开源版留空，务必不要提交自己的证书与密码）
-     *
-     * 本仓库不内置任何签名证书。命令行构建产出的是未签名 HAP，无法直接装机。
-     * 请在 DevEco Studio 中一次性生成签名，之后构建配置会自动回填：
-     *   File → Project Structure → Project → Signing Configs
-     *   → 勾选 "Automatically generate signature" → 登录华为账号 → OK
-     *
-     * 回填后形如（不要在 PR 里提交这一段）：
-     *   "signingConfigs": [{
-     *     "name": "default",
-     *     "type": "HarmonyOS",
-     *     "material": {
-     *       "certpath":      "<你的绝对路径>.cer",
-     *       "keyAlias":      "debugKey",
-     *       "keyPassword":   "<加密后的口令>",
-     *       "profile":       "<你的绝对路径>.p7b",
-     *       "signAlg":       "SHA256withECDSA",
-     *       "storeFile":     "<你的绝对路径>.p12",
-     *       "storePassword": "<加密后的口令>"
-     *     }
-     *   }]
-     */
+    // Signing materials stay local. Public builds produce unsigned HAPs.
     "signingConfigs": [],
     "products": [
       {
         "name": "default",
         "compileSdkVersion": "26.0.0",
-        "targetSdkVersion": "26.0.0",
-        "compatibleSdkVersion": "26.0.0",
+        "targetSdkVersion": "6.1.1(24)",
+        "compatibleSdkVersion": "6.1.1(24)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {

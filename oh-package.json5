@@ -1,8 +1,8 @@
 {
   "modelVersion": "26.0.0",
-  "name": "libretv-harmonyos",
-  "version": "1.9.8",
-  "description": "LibreTV native client for HarmonyOS (API 26)",
+  "name": "libretv-harmony-tv",
+  "version": "1.10.0-tv.1",
+  "description": "LibreTV for Harmony TV — API 24+ television client",
   "main": "",
   "author": "LibreTV Community",
   "license": "AGPL-3.0",

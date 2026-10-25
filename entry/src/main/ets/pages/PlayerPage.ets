@@ -24,7 +24,6 @@ import { LocalHttpServer } from '../common/LocalHttpServer';
 import { NavIds } from '../common/NavIds';
 import { AppLifecycle } from '../common/AppLifecycle';
 import { Brand } from '../common/Brand';
-import { GlassMaterial } from '../common/GlassMaterial';
 import { latestNavParam } from '../common/NavParam';
 import { ShareService } from '../common/ShareService';
 import { ShareTarget } from '../common/ShareLink';
@@ -1623,6 +1622,7 @@ export struct PlayerPage {
   }
 
   private applyBrightness(v: number): void {
+    if (DevicePolicy.isTV()) return;
     const win = this.win;
     if (win === null) {
       return;
@@ -1634,6 +1634,7 @@ export struct PlayerPage {
 
   /** -1 = 交还系统亮度 */
   private restoreBrightness(): void {
+    if (DevicePolicy.isTV()) return;
     const win = this.win;
     if (win === null) {
       return;
@@ -1720,6 +1721,7 @@ export struct PlayerPage {
 
   private setLandscape(on: boolean): void {
     this.landscape = on;
+    if (DevicePolicy.isTV()) return;
     const context = this.getUIContext().getHostContext();
     if (context === undefined) {
       return;
@@ -2163,7 +2165,6 @@ export struct PlayerPage {
             // 压到画面上会把画面提亮，白字反而更糊。播放页永远压着视频，固定用深色底。
             .backgroundColor('#4D000000')
             .backgroundEffect({ radius: 26, saturation: 1.5 })
-            .systemMaterial(GlassMaterial.supported ? GlassMaterial.liquid : undefined)
             // 上沿大圆角：通栏色带在实机上和旧版的黑色压暗条几乎分不出来，
             // 圆角边界才能被眼睛抓到，玻璃块感才立得住。
             // 不画描边：这条玻璃已经贴到屏幕底边，四边描边会在下方多出一条

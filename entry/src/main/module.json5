@@ -12,14 +12,6 @@
       "tv"
     ],
     "pages": "$profile:main_pages",
-    // 应用级开启 HarmonyOS 7 沉浸光感：弹窗、菜单等系统组件默认带上材质与光感反馈。
-    // entry 类型 module 才生效；组件级 systemMaterial 优先级更高。
-    "metadata": [
-      {
-        "name": "ohos.arkui.UIMaterial.state",
-        "value": "enable"
-      }
-    ],
     "requestPermissions": [
       {
         "name": "ohos.permission.INTERNET",

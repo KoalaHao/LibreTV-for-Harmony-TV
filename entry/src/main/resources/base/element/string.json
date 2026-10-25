@@ -6,7 +6,7 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "LibreTV"
+      "value": "LibreTV for Harmony TV"
     },
     {
       "name": "EntryAbility_desc",
@@ -26,11 +26,11 @@
     },
     {
       "name": "brand_name",
-      "value": "LibreTV"
+      "value": "LibreTV for Harmony TV"
     },
     {
       "name": "brand_about_title",
-      "value": "LibreTV 鸿蒙原生客户端"
+      "value": "LibreTV for Harmony TV"
     },
     {
       "name": "brand_disclaimer",

@@ -7,8 +7,13 @@
  */
 
 import { display, window } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
 
 export class DevicePolicy {
+  static isTV(): boolean {
+    return deviceInfo.deviceType === 'tv';
+  }
+
   /** 宽屏阈值：短边 ≥ 600vp 视为平板/阔直板（平板实测约 672vp，手机约 360-420vp） */
   static readonly WIDE_MIN_VP: number = 600;
   private static bound: boolean = false;
@@ -65,6 +70,7 @@ export class DevicePolicy {
 
   /** 按当前设备形态应用默认方向：宽设备跟随旋转，普通手机锁竖屏 */
   static applyDefault(): void {
+    if (DevicePolicy.isTV()) return;
     const win = DevicePolicy.win;
     if (win === null) {
       return;

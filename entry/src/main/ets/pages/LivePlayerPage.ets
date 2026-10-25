@@ -848,6 +848,7 @@ export struct LivePlayerPage {
 
   private setLandscape(on: boolean): void {
     this.landscape = on;
+    if (DevicePolicy.isTV()) return;
     const context = this.getUIContext().getHostContext();
     if (context === undefined) {
       return;
