@@ -70,11 +70,11 @@ export class DoubanClient {
    * 注意 2：该接口偶发返回空 data（疑似频控），调用方必须准备回退方案。
    */
   static async browse(tags: string, genre: string, country: string, sort: string,
-    start: number): Promise<RecommendItem[]> {
+    start: number, yearRange: string = ''): Promise<RecommendItem[]> {
     const ranges: string[] = sort === 'R' ? ['5,10', '0,10'] : ['0,10'];
     for (const range of ranges) {
       const got: RecommendItem[] =
-        await DoubanClient.browseOnce(tags, genre, country, sort, range, start);
+        await DoubanClient.browseOnce(tags, genre, country, sort, range, start, yearRange);
       if (got.length > 0) {
         return got;
       }
@@ -84,7 +84,7 @@ export class DoubanClient {
 
   /** browse() 的单次请求实现，range 由调用方决定 */
   private static async browseOnce(tags: string, genre: string, country: string, sort: string,
-    range: string, start: number): Promise<RecommendItem[]> {
+    range: string, start: number, yearRange: string): Promise<RecommendItem[]> {
     let url: string = 'https://movie.douban.com/j/new_search_subjects?sort=' + sort +
       '&range=' + range + '&start=' + start + '&tags=' + encodeURIComponent(tags);
     if (genre !== '') {
@@ -92,6 +92,9 @@ export class DoubanClient {
     }
     if (country !== '') {
       url += '&countries=' + encodeURIComponent(country);
+    }
+    if (yearRange !== '') {
+      url += '&year_range=' + encodeURIComponent(yearRange);
     }
     const res = await HttpClient.getText(url, {
       'User-Agent': HttpClient.UA,

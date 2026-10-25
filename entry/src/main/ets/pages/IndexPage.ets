@@ -6,6 +6,9 @@
 import { ContinuedPlayback, PlaybackContinuation } from '../common/PlaybackContinuation';
 import { TV_FOCUS } from '../common/TvFocus';
 import { BackNavigation } from '../common/BackNavigation';
+import { DevicePolicy } from '../common/DevicePolicy';
+import { RecommendYears } from '../common/RecommendYears';
+import { TvContinueCard, TvNavButton, TvPosterCard } from '../components/TvHomeCards';
 import { display } from '@kit.ArkUI';
 import { RecommendItem, PlayRecord, LiveChannel, EpgProgramme, VideoDetail } from '../model/Types';
 import { HistoryStore } from '../data/HistoryStore';
@@ -182,6 +185,7 @@ struct IndexPage {
   private liveFavCb: () => void = () => {};
 
   @State activeTab: number = 0;
+  @State private tvCategorySelected: boolean = false;
   /**
    * 导航胶囊的「光追」反馈：记录光斑落在哪个 tab 上，以及光的扩散进度。
    * 三个字段都必须同步驱动同一个 tabItem 的 opacity / scale，
@@ -218,6 +222,7 @@ struct IndexPage {
   @State recGenre: string = '';
   /** 发行地区筛选，空串表示不限 */
   @State recCountry: string = '';
+  @State private recYear: string = '';
   /** 排序方式：R=最新(按发行时间从近到远) T=综合推荐 S=评分最高 */
   @State recSort: string = REC_SORT_DEFAULT;
   /** 当前展开的筛选面板：'' 收起 / sort / genre / country */
@@ -424,6 +429,11 @@ struct IndexPage {
       this.navStack.pop();
     }, () => {
       if (this.filterPanel !== '') this.filterPanel = '';
+      else if (DevicePolicy.isTV() && this.tvCategorySelected) {
+        this.tvCategorySelected = false;
+        this.homeOffset = 0;
+        this.homeScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: false });
+      }
       else if (this.activeTab !== 0) this.selectTab(0);
       else if (this.searchValue !== '') this.searchValue = '';
     });
@@ -622,21 +632,21 @@ struct IndexPage {
         // + 地区(countries) + 排序(sort)，一条链路就能覆盖「默认浏览」和「组合筛选」，
         // 不必为筛选再造一套分页逻辑。
         items =
-          await DoubanClient.browse(cat.tags, this.recGenre, this.recCountry, this.recSort, start);
+          await DoubanClient.browse(cat.tags, this.recGenre, this.recCountry, this.recSort, start, RecommendYears.range(this.recYear));
         if (items.length === 0 && start > 0 && !append) {
           // 翻页翻过头了（或筛选后总量不足一页），回到第一页再取一次
           start = 0;
           this.recPageStart = 0;
-          items = await DoubanClient.browse(cat.tags, this.recGenre, this.recCountry, this.recSort, 0);
+          items = await DoubanClient.browse(cat.tags, this.recGenre, this.recCountry, this.recSort, 0, RecommendYears.range(this.recYear));
         }
-        if (items.length === 0 && !append && this.recGenre === '' && this.recCountry === '') {
+        if (items.length === 0 && !append && this.recGenre === '' && this.recCountry === '' && this.recYear === '') {
           // 浏览接口偶发返回空 data（疑似频控）。没加筛选时回退到老接口，
           // 至少首页不至于整块空白；加了筛选就老实显示空态 —— 拿不相关的片
           // 去冒充「筛选结果」比空白更糟。
           items = await DoubanClient.recommend(cat.type, cat.tag, 0, 30);
           fallback = true;
         }
-        if (items.length === 0 && !append && cat.key === 'anime') {
+        if (items.length === 0 && !append && cat.key === 'anime' && this.recGenre === '' && this.recCountry === '' && this.recYear === '') {
           items = await BangumiClient.calendar();
           fallback = true;
         }
@@ -651,7 +661,7 @@ struct IndexPage {
             more = await DoubanClient.top250(start + pageSize);
           } else {
             const cat2: RecCat = this.currentCat();
-            more = await DoubanClient.browse(cat2.tags, this.recGenre, this.recCountry, this.recSort, start + pageSize);
+            more = await DoubanClient.browse(cat2.tags, this.recGenre, this.recCountry, this.recSort, start + pageSize, RecommendYears.range(this.recYear));
           }
           if (more.length > 0) {
             items = items.concat(more);
@@ -785,7 +795,7 @@ struct IndexPage {
 
   /** 是否有任何非默认的筛选/排序生效（决定要不要显示「重置」） */
   private hasFilter(): boolean {
-    return this.recGenre !== '' || this.recCountry !== '' || this.recSort !== REC_SORT_DEFAULT;
+    return this.recGenre !== '' || this.recCountry !== '' || this.recYear !== '' || this.recSort !== REC_SORT_DEFAULT;
   }
 
   /** 当前排序的中文名 */
@@ -800,6 +810,7 @@ struct IndexPage {
 
   /** 筛选条上那一枚 chip 显示什么 */
   private filterLabel(kind: string): string {
+    if (kind === 'year') return this.recYear === '' ? '年代' : this.recYear;
     if (kind === 'sort') {
       return this.currentSortLabel();
     }
@@ -811,6 +822,7 @@ struct IndexPage {
 
   /** chip 是否处于「已设置」状态（用主色高亮） */
   private filterActive(kind: string): boolean {
+    if (kind === 'year') return this.recYear !== '';
     if (kind === 'sort') {
       return this.recSort !== REC_SORT_DEFAULT;
     }
@@ -821,6 +833,7 @@ struct IndexPage {
   }
 
   private filterPanelTitle(): string {
+    if (this.filterPanel === 'year') return '发行年代';
     if (this.filterPanel === 'sort') {
       return '排序方式';
     }
@@ -832,6 +845,7 @@ struct IndexPage {
 
   /** 当前面板的可选项 */
   private filterOptions(): string[] {
+    if (this.filterPanel === 'year') return RecommendYears.options();
     if (this.filterPanel === 'sort') {
       const labels: string[] = [];
       for (const s of REC_SORTS) {
@@ -846,6 +860,7 @@ struct IndexPage {
   }
 
   private isOptionSelected(opt: string): boolean {
+    if (this.filterPanel === 'year') return opt === (this.recYear === '' ? REC_FILTER_ALL : this.recYear);
     if (this.filterPanel === 'sort') {
       return opt === this.currentSortLabel();
     }
@@ -878,6 +893,12 @@ struct IndexPage {
         this.recGenre = gv;
         changed = true;
       }
+    } else if (this.filterPanel === 'year') {
+      const year = opt === REC_FILTER_ALL ? '' : opt;
+      if (year !== this.recYear) {
+        this.recYear = year;
+        changed = true;
+      }
     } else {
       const cv: string = opt === REC_FILTER_ALL ? '' : opt;
       if (cv !== this.recCountry) {
@@ -900,6 +921,7 @@ struct IndexPage {
     }
     this.recGenre = '';
     this.recCountry = '';
+    this.recYear = '';
     this.recSort = REC_SORT_DEFAULT;
     this.recPageStart = 0;
     this.loadRecommend();
@@ -1307,6 +1329,9 @@ struct IndexPage {
 
   build() {
     Navigation(this.navStack) {
+      if (DevicePolicy.isTV()) {
+        this.tvShell()
+      } else {
       Stack({ alignContent: Alignment.TopStart }) {
         // 背景铺满全屏（含状态栏与底部导航条）
         // 渐变底：沉浸光感的"通透"需要有东西可透 —— 纯色底上的玻璃只是一块灰板。
@@ -1485,7 +1510,7 @@ struct IndexPage {
       }
       .width('100%')
       .height('100%')
-
+      }
     }
     .width('100%')
     .height('100%')
@@ -1522,6 +1547,153 @@ struct IndexPage {
 
 
   // ---------- 路由表 ----------
+
+  private openTvSearch(): void {
+    const param: SearchPageParam = { keyword: '' };
+    this.navStack.pushPath({ name: 'Search', param: param });
+  }
+
+  private selectTvCategory(cat: RecCat): void {
+    this.selectTab(0);
+    this.tvCategorySelected = true;
+    if (this.recCatKey !== cat.key) {
+      this.recCatKey = cat.key;
+      this.recPageStart = 0;
+      this.loadRecommend();
+    }
+    this.homeOffset = 0;
+    try { this.homeScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: false }); } catch (e) { /* Home mounts after a tab change. */ }
+  }
+
+  private openTvHome(): void {
+    this.tvCategorySelected = false;
+    this.homeOffset = 0;
+    this.selectTab(0);
+    try { this.homeScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: false }); } catch (e) { /* Home mounts after a tab change. */ }
+  }
+
+  private tvRecommendationTitle(): string {
+    if (this.tvCategorySelected) {
+      for (const cat of REC_CATS) {
+        if (cat.key === this.recCatKey) return cat.label + '精选';
+      }
+    }
+    return '精选推荐';
+  }
+
+  @Builder
+  tvShell() {
+    Stack({ alignContent: Alignment.Top }) {
+      Column().width('100%').height('100%').linearGradient({
+        direction: GradientDirection.Bottom,
+        colors: [['#202633', 0], ['#11151D', 0.45], ['#0D1016', 1]]
+      })
+      Column() {
+        if (this.activeTab === 0) this.tvHomeContent()
+        else if (this.activeTab === 1) this.liveContent()
+        else this.mineContent()
+      }.width('100%').height('100%')
+
+      // One shared navigation row replaces the phone search bar, category rows and bottom dock.
+      Row({ space: 4 }) {
+        Text('LibreTV').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#F2F4F8')
+          .margin({ left: 14, right: 18 })
+        TvNavButton({ label: '首页', selected: this.activeTab === 0 && !this.tvCategorySelected,
+          onSelect: () => this.openTvHome() })
+        if (!this.recRank) {
+          ForEach(REC_CATS, (cat: RecCat) => {
+            TvNavButton({ label: cat.label,
+              selected: this.activeTab === 0 && this.tvCategorySelected && this.recCatKey === cat.key,
+              onSelect: () => this.selectTvCategory(cat) })
+          }, (cat: RecCat) => cat.key)
+        }
+        TvNavButton({ label: '直播', selected: this.activeTab === 1, onSelect: () => this.selectTab(1) })
+        Blank().layoutWeight(1)
+        Row({ space: 8 }) {
+          Image($r('app.media.ic_search')).width(20).height(20).fillColor('#E0E3EA')
+          Text('搜索').fontSize(17).fontColor('#E0E3EA')
+        }
+        .height(40).padding({ left: 14, right: 14 }).borderRadius(20)
+        .backgroundColor('#17FFFFFF').focusable(true).focusBox(TV_FOCUS)
+        .onClick(() => this.openTvSearch())
+        TvNavButton({ label: '我的', selected: this.activeTab === 2, onSelect: () => this.selectTab(2) })
+      }
+      .height(56).width('100%').padding({ left: 8, right: 8 })
+      .backgroundColor('#ED292F3A').borderRadius(28)
+      .border({ width: 0.5, color: '#35FFFFFF' })
+      .shadow({ radius: 20, color: '#35000000', offsetY: 8 })
+      .margin({ top: 20 })
+      .constraintSize({ maxWidth: '94%' })
+    }.width('100%').height('100%')
+  }
+
+  @Builder
+  tvHomeContent() {
+    Scroll(this.homeScroller) {
+      Column({ space: 22 }) {
+        if (this.homeHistory.length > 0 && !this.tvCategorySelected) {
+          Column({ space: 12 }) {
+            Row() {
+              Text('继续观看').fontSize(21).fontWeight(FontWeight.Bold).fontColor('#F0F3F9').layoutWeight(1)
+              TvNavButton({ label: '全部记录', onSelect: () => this.pushHistory() })
+            }.width('100%').height(36)
+            Scroll() {
+              Row({ space: 14 }) {
+                ForEach(this.homeHistory, (rec: PlayRecord) => {
+                  TvContinueCard({ title: rec.name, poster: rec.pic !== undefined ? rec.pic : '',
+                    episode: rec.episodeName !== undefined ? rec.episodeName : '继续播放',
+                    positionLabel: Utils.formatTime(rec.positionMs), progress: this.progressWidth(rec),
+                    onPlay: () => this.continuePlay(rec) })
+                }, (rec: PlayRecord) => rec.sourceKey + ':' + rec.vodId + ':' + rec.updatedAt.toString())
+              }.constraintSize({ minWidth: '100%' }).padding({ bottom: 4 })
+            }.width('100%').height(104).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+          }.width('100%')
+        }
+
+        Column({ space: 16 }) {
+          Row({ space: 8 }) {
+            Text(this.tvRecommendationTitle()).fontSize(23).fontWeight(FontWeight.Bold)
+              .fontColor('#F0F3F9').layoutWeight(1)
+            if (!this.recRank) {
+              this.filterChip('sort')
+              this.filterChip('genre')
+              this.filterChip('country')
+              this.filterChip('year')
+              if (this.hasFilter()) this.resetFilterChip()
+            }
+            TvNavButton({ label: '换一批', onSelect: () => this.nextRecommend() })
+          }.width('100%').height(40)
+          if (this.filterPanel !== '') this.filterPanelView()
+          if (this.recommendItems.length === 0) {
+            if (this.recommendLoading) LoadingView().height(260)
+            else EmptyView({ emptyText: this.hasFilter() ? '当前筛选没有结果，试试放宽条件' : '暂无推荐，请检查网络或切换推荐来源' })
+          } else {
+            Grid() {
+              ForEach(this.recommendItems, (item: RecommendItem) => {
+                GridItem() {
+                  TvPosterCard({ title: item.title, poster: item.cover,
+                    rating: item.rating !== undefined ? item.rating : '',
+                    onOpen: () => this.openRecommend(item) })
+                }
+              }, (item: RecommendItem) => item.id)
+            }
+            .columnsTemplate('1fr 1fr 1fr 1fr 1fr 1fr').columnsGap(18).rowsGap(24)
+            .width('100%').opacity(this.recSwitching ? 0.45 : 1)
+            this.loadMoreFooter()
+          }
+        }.width('100%')
+      }
+      .width('100%').padding({ left: 40, right: 40, top: 96, bottom: 36 })
+      .onAreaChange((oldArea: Area, newArea: Area) => {
+        const width = newArea.width as number;
+        if (width > 0 && Math.abs(width - this.homeWidth) > 1) this.homeWidth = width;
+      })
+    }
+    .width('100%').height('100%').scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+    .onScrollStop(() => { this.homeOffset = this.homeScroller.currentOffset().yOffset; })
+    .onScrollEdge((edge: Edge) => { if (edge === Edge.Bottom) this.loadMoreRecommend(); })
+  }
 
   @Builder
   pageMap(name: string, param: Object) {
@@ -1790,6 +1962,7 @@ struct IndexPage {
    * 否则首屏会被搜索栏盖住。搜索栏本身要能点，所以浮层不吃触摸的地方不能挡。
    */
   private topInset(): number {
+    if (DevicePolicy.isTV()) return 96;
     const searchH: number = this.wide() ? 44 : 36;
     const padTop: number = this.wide() ? 4 : 10;
     const padBottom: number = this.wide() ? 6 : 4;
@@ -1863,6 +2036,10 @@ struct IndexPage {
   private static readonly NAV_CONTENT_PAD: number = 110;
 
   /** 胶囊左右留白：手机 14vp（参考图 33/860 = 3.84%），平板 22vp */
+  private navigationContentPad(): number {
+    return DevicePolicy.isTV() ? 12 : IndexPage.NAV_CONTENT_PAD;
+  }
+
   private navSidePad(): number {
     return this.wide() ? 22 : 14;
   }
@@ -1924,6 +2101,7 @@ struct IndexPage {
    * 一眼看过去像是分类按钮变小了。
    */
   private filterFont(): number {
+    if (DevicePolicy.isTV()) return 16;
     // 平板 16→14；手机 13→12（再小就难认了）
     return this.wide() ? this.chipFont() - 2 : this.chipFont() - 1;
   }
@@ -2072,6 +2250,7 @@ struct IndexPage {
               this.filterChip('sort')
               this.filterChip('genre')
               this.filterChip('country')
+              this.filterChip('year')
               if (this.hasFilter()) {
                 this.resetFilterChip()
               }
@@ -2141,7 +2320,7 @@ struct IndexPage {
       .width('100%')
       // bottom 里那 96vp 是给导航坞让位：坞是浮在内容上的，
       // 不留这一截的话滚到底时最后一行永远被它压住。
-      .padding({ top: this.topInset(), bottom: 20 + IndexPage.NAV_CONTENT_PAD })
+      .padding({ top: this.topInset(), bottom: 20 + this.navigationContentPad() })
       // 实测首页可用宽度：旋转、分屏、折叠展开都会改变它，所以不能只在启动时取一次。
       // 阈值 1vp 防止亚像素抖动引发无谓重排。
       .onAreaChange((oldArea: Area, newArea: Area) => {
@@ -2589,7 +2768,7 @@ struct IndexPage {
           left: 16,
           right: 16,
           // 收起态仍要给导航坞让位
-          bottom: this.longExpandedGroup() !== null ? LIVE_EXPAND_BOTTOM : 16 + IndexPage.NAV_CONTENT_PAD
+          bottom: this.longExpandedGroup() !== null ? LIVE_EXPAND_BOTTOM : 16 + this.navigationContentPad()
         })
       }
       }
@@ -2710,7 +2889,7 @@ struct IndexPage {
           .width('100%')
           .textAlign(TextAlign.Center)
           // 底部留白放在滚动内容的末尾，让最后一行能滚过胶囊、不被压住
-          .padding({ top: 16, bottom: 24 + IndexPage.NAV_CONTENT_PAD })
+          .padding({ top: 16, bottom: 24 + this.navigationContentPad() })
       }
       .width('100%')
       // 同详情页：内容不满一屏时 Scroll 会把子内容垂直居中，顶部凭空多出大片空白。
