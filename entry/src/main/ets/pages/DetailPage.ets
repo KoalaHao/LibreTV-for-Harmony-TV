@@ -62,6 +62,7 @@ export struct DetailPage {
   @State lines: PlayLine[] = [];
   @State currentLine: number = 0;
   @State currentEp: number = 0;
+  @State hoveredEpisode: number = -1;
   @State favorite: boolean = false;
   @State descExpanded: boolean = false;
   @State progress: PlayRecord | null = null;
@@ -868,6 +869,8 @@ export struct DetailPage {
                   .fontSize(this.wideLayout() ? 16 : 13)
                   .fontColor(this.epTextColor(ep))
                   .backgroundColor(this.epBgColor(ep))
+                  .border({ width: this.hoveredEpisode === ep.index ? 2 : 0, color: $r('app.color.color_primary') })
+                  .onHover((hovered: boolean) => { this.hoveredEpisode = hovered ? ep.index : -1; })
                   .borderRadius(8)
                   .width('100%')
                   .height(this.wideLayout() ? 48 : 40)

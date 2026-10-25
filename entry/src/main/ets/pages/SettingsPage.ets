@@ -234,12 +234,13 @@ export struct SettingsPage {
 
               SettingsRow({
                 rowTitle: '主题模式',
-                rowValue: this.labelOf(SettingsPage.THEMES, this.themeMode),
+                rowValue: DevicePolicy.isTV() ? '深色（电视）' : this.labelOf(SettingsPage.THEMES, this.themeMode),
                 onRowClick: () => {
-                  this.togglePanel('theme');
+                  if (DevicePolicy.isTV()) this.toast('Mate TV 使用深色主题');
+                  else this.togglePanel('theme');
                 }
               })
-              if (this.activePanel === 'theme') {
+              if (!DevicePolicy.isTV() && this.activePanel === 'theme') {
                 this.optionPanel('theme', SettingsPage.THEMES, this.themeMode)
               }
 
@@ -381,6 +382,7 @@ export struct SettingsPage {
       this.adFilter = key;
       this.save({ adFilter: key });
     } else if (name === 'theme') {
+      if (DevicePolicy.isTV()) return;
       this.themeMode = key;
       this.save({ themeMode: key });
       this.toast('主题将在重启应用后生效');

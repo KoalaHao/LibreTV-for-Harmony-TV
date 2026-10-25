@@ -130,6 +130,7 @@ export struct VodCard {
 
   /** 采样到的海报主色，'#RRGGBB'；空串表示还没采到 */
   @State mainColor: string = '';
+  @State private hovered: boolean = false;
 
   aboutToAppear(): void {
     if (this.cardGlow) {
@@ -314,9 +315,11 @@ export struct VodCard {
     // 不同封面的颜色在页面上连成一层淡淡的彩边，而不是各自泼一滩。
     // 没采到主色时退回一层极淡的白边，保住卡片轮廓不糊进背景。
     .border({
-      width: 1,
-      color: this.mainColor !== '' ? this.glowColor(0.55) : '#1FFFFFFF'
+      width: this.hovered ? 2 : 1,
+      color: this.hovered ? $r('app.color.color_primary')
+        : (this.mainColor !== '' ? this.glowColor(0.55) : '#1FFFFFFF')
     })
+    .onHover((hovered: boolean) => { this.hovered = hovered; })
     .focusable(true)
     .focusBox(TV_FOCUS)
     .onClick(() => {
@@ -328,6 +331,7 @@ export struct VodCard {
 /** 设置项行：左侧标题，右侧值 + 箭头 */
 @Component
 export struct SettingsRow {
+  @State private hovered: boolean = false;
   @Prop rowTitle: string = '';
   @Prop rowValue: string = '';
   @Prop rowShowArrow: boolean = true;
@@ -357,7 +361,8 @@ export struct SettingsRow {
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 14, bottom: 14 })
-    .backgroundColor($r('app.color.color_card'))
+    .backgroundColor(this.hovered ? $r('app.color.color_chip_bg') : $r('app.color.color_card'))
+    .onHover((hovered: boolean) => { this.hovered = hovered; })
     .focusable(true)
     .focusBox(TV_FOCUS)
     .onClick(() => {

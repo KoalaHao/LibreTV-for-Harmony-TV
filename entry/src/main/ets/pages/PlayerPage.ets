@@ -4,6 +4,7 @@
 
 import { ContinuedPlayback, PlaybackContinuation } from '../common/PlaybackContinuation';
 import { ContinuationService } from '../common/ContinuationService';
+import { TvPlaybackGesture } from '../common/TvPlaybackGesture';
 import { TvLayout } from '../common/TvLayout';
 import { KeyCode } from '@kit.InputKit';
 import { TV_FOCUS } from '../common/TvFocus';
@@ -82,6 +83,7 @@ export struct PlayerPage {
   private continuationOwner: number = -1;
 
   private player: AvPlayerController = new AvPlayerController();
+  private tvGesture: TvPlaybackGesture = new TvPlaybackGesture();
   private holderFile: fs.File | null = null;
   private cacheDir: string = '';
   private surfaceId: string = '';
@@ -1122,6 +1124,7 @@ export struct PlayerPage {
       return;
     }
     this.released = true;
+    this.tvGesture.reset();
     this.releaseCastSession();
     this.clearStall();
     this.clearWatchdog();
@@ -1894,9 +1897,45 @@ export struct PlayerPage {
     this.syncCastPlayback(this.playing);
   }
 
+  private finishTvGesture(): void {
+    const action = this.tvGesture.end();
+    if (action === 'controls') {
+      this.controlsVisible = true;
+      this.scheduleHideControls();
+    } else if (action === 'forward' || action === 'backward') {
+      this.seekFromRemote(this.positionMs + (action === 'forward' ? 10000 : -10000));
+      this.toast(this.positionText);
+    }
+  }
+
+  private showPlaybackMenu(): void {
+    this.controlsVisible = true;
+    this.getUIContext().getPromptAction().showActionMenu({
+      title: '播放操作',
+      buttons: [
+        { text: '选集', color: '#D39B36' },
+        { text: '倍速', color: '#D39B36' },
+        { text: '分享与接续', color: '#D39B36' }
+      ]
+    }).then((result: promptAction.ActionMenuSuccessResponse) => {
+      if (result.index === 0) this.showEpisodes = true;
+      else if (result.index === 1) this.showSpeeds = true;
+      else if (result.index === 2) this.showShareOptions();
+      this.scheduleHideControls();
+    }).catch(() => { this.scheduleHideControls(); });
+  }
+
+  // Lingxi Menu is a real key event. The DPAD / Enter cases below serve keyboards and conventional remotes.
   private handleRemoteKey(event: KeyEvent): void {
-    if (!DevicePolicy.isTV() || event.type !== KeyType.Down || this.released) return;
+    if (!DevicePolicy.isTV() || this.released) return;
     const code = event.keyCode;
+    if (code === KeyCode.KEYCODE_MENU) {
+      if (event.type === KeyType.Down) this.tvGesture.menuDown(Date.now());
+      else if (event.type === KeyType.Up && this.tvGesture.menuUp(Date.now())) this.showPlaybackMenu();
+      // Leave long Menu presses to the system control center.
+      return;
+    }
+    if (event.type !== KeyType.Down) return;
     let handled = true;
     if (code === KeyCode.KEYCODE_MEDIA_PLAY_PAUSE) this.togglePlay();
     else if (code === KeyCode.KEYCODE_MEDIA_PLAY) this.player.play();
@@ -2628,12 +2667,18 @@ export struct PlayerPage {
           this.updateSurfaceSize();
         }
       })
-      // 上下滑调音量 / 亮度：左半屏音量、右半屏亮度，往上滑变大。
+      // TV: Lingxi normalizes touchpad/directional input to PanGesture. Only hidden-control video gestures seek.
+      // Phone/tablet: preserve the existing vertical volume / brightness gestures.
       // 挂在根容器上而不是点击层：控制条显示时它铺满全屏，
       // 挂在点击层会被它挡住（Slider / 按钮自己有手势，仍然优先响应）。
       .gesture(
-        PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+        PanGesture({ fingers: 1, direction: DevicePolicy.isTV() ? PanDirection.All : PanDirection.Vertical })
           .onActionStart((event: GestureEvent) => {
+            if (DevicePolicy.isTV()) {
+              this.tvGesture.begin(!this.controlsVisible && !this.showEpisodes && !this.showSpeeds &&
+                !this.showSources && this.hasStarted && this.errorText === '');
+              return;
+            }
             const fingers = event.fingerList;
             if (fingers.length > 0) {
               // globalX 是相对窗口的，最贴近「屏幕左右半边」的直觉；
@@ -2643,10 +2688,16 @@ export struct PlayerPage {
             }
           })
           .onActionUpdate((event: GestureEvent) => {
-            this.updateAdjust(event.offsetY);
+            if (DevicePolicy.isTV()) this.tvGesture.update(event.offsetX, event.offsetY);
+            else this.updateAdjust(event.offsetY);
           })
           .onActionEnd(() => {
-            this.endAdjust();
+            if (DevicePolicy.isTV()) this.finishTvGesture();
+            else this.endAdjust();
+          })
+          .onActionCancel(() => {
+            this.tvGesture.cancel();
+            if (!DevicePolicy.isTV()) this.endAdjust();
           })
       )
     }
@@ -2838,6 +2889,7 @@ export struct PlayerPage {
    * 否则声音会在后台一直响下去（用户最初报的就是这个）。
    */
   private handleAppBackground(background: boolean): void {
+    if (background) this.tvGesture.reset();
     this.clearBgTimer();
     if (this.released) {
       return;

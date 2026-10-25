@@ -32,7 +32,7 @@ export default class EntryAbility extends UIAbility {
     SourceManager.shared().load();
     DownloadManager.shared().init(this.context);
     // 应用主题：跟随系统 / 固定浅色 / 固定深色
-    const mode = SettingsStore.shared().get().themeMode;
+    const mode = DevicePolicy.isTV() ? 'dark' : SettingsStore.shared().get().themeMode;
     try {
       if (mode === 'light') {
         this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
