@@ -238,3 +238,61 @@ test('paused seek completion publishes the restored position without waiting for
   native.listeners.get('seekDone')(99999);
   assert.deepEqual(positions.at(-1), [42420, 900000]);
 });
+
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function sizeExcursion({paused=false,callback=true,earlyError=false}={}){
+ const kit=await setup();const{native,controller}=kit;
+ native.currentTime=363175;native.duration=900000;
+ const toggles=[];native.setSuperResolution=async enabled=>{toggles.push(enabled);if(callback)native.listeners.get('superResolutionChanged')(enabled);};
+ await controller.playUrl('https://example.test/mixed.m3u8',{});
+ native.state=paused?'paused':'playing';
+ native.listeners.get('videoSizeChange')(1918,802);
+ native.listeners.get('superResolutionChanged')(true);
+ if(earlyError)native.listeners.get('error')({code:5410003});
+ native.listeners.get('videoSizeChange')(1920,1080);
+ native.listeners.get('superResolutionChanged')(false);
+ native.listeners.get('videoSizeChange')(1918,802);
+ return{...kit,toggles};
+}
+test('HLS return to a previously active size reissues SR once and waits for the native true callback',async()=>{
+ const{native,controller,states,toggles}=await sizeExcursion();
+ assert.equal(states.at(-1),'inactive');await delay(380);
+ assert.deepEqual(toggles,[true]);assert.equal(states.at(-1),'active');assert.equal(native.strategies.length,1);
+ native.listeners.get('videoSizeChange')(1918,802);await delay(350);assert.deepEqual(toggles,[true]);controller.release();
+});
+test('a transient unsupported-size error arriving before the size callback does not permanently disable the original film SR',async()=>{
+ const{controller,states,toggles,errors}=await sizeExcursion({earlyError:true});
+ await delay(380);assert.deepEqual(toggles,[true]);assert.equal(states.at(-1),'active');assert.deepEqual(errors,[]);controller.release();
+});
+test('automatic missing-callback recovery reprepares the identical source at the paused position',async()=>{
+ globalThis.__testMedia.SeekMode={SEEK_CLOSEST:2,SEEK_PREV_SYNC:0};
+ const{native,controller,states,toggles}=await sizeExcursion({paused:true,callback:false});
+ const calls=[];native.setVolume=()=>{};native.seek=(p,m)=>calls.push(['seek',p,m]);native.play=()=>calls.push(['play']);
+ await delay(740);assert.deepEqual(toggles,[true]);assert.equal(native.strategies.length,2);assert.equal(states.at(-1),'requesting');
+ native.state='prepared';native.listeners.get('stateChange')('prepared');await new Promise(r=>setImmediate(r));
+ assert.deepEqual(calls,[['seek',363175,2]]);controller.release();
+});
+test('manual Off, source replacement and release cancel scheduled size recovery',async()=>{
+ for(const action of ['off','source','release']){
+  const{native,controller,toggles}=await sizeExcursion();
+  if(action==='off')await controller.setSuperResolution(false);
+  if(action==='source')await controller.playUrl('https://example.test/next.m3u8',{});
+  if(action==='release')controller.release();
+  await delay(380);assert.deepEqual(toggles,action==='off'?[false]:[],action);assert.equal(native.strategies.length,action==='source'?2:1);controller.release();
+ }
+});
+test('manual Off supersedes an in-flight enable before the delayed reprepare fallback',async()=>{
+ const{native,controller,states}=await setup();native.setSuperResolution=async()=>{};
+ await controller.playUrl('https://example.test/off-wins.m3u8',{});native.state='playing';
+ const enabling=controller.setSuperResolution(true,true);await delay(30);await controller.setSuperResolution(false);
+ assert.equal(await enabling,false);assert.equal(native.strategies.length,1);assert.equal(states.at(-1),'off');controller.release();
+});
+test('an unconfirmed size, ordinary inactive callback and another size departure do not trigger restart loops',async()=>{
+ const{native,controller}=await setup();let toggles=0;native.setSuperResolution=async()=>{toggles++;};
+ await controller.playUrl('https://example.test/unknown.m3u8',{});native.state='playing';
+ native.listeners.get('videoSizeChange')(1280,720);native.listeners.get('superResolutionChanged')(false);
+ await delay(350);assert.equal(toggles,0);controller.release();
+ const k=await sizeExcursion({callback:false});await delay(400);
+ k.native.listeners.get('videoSizeChange')(1920,1080);await delay(400);
+ assert.equal(k.native.strategies.length,1);assert.deepEqual(k.toggles,[true]);k.controller.release();
+});

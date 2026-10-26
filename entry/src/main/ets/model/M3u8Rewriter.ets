@@ -8,7 +8,7 @@
  * 广告判定（与 LibreTV「严格 / 宽松」两档对齐）：
  * - loose：丢弃被 #EXT-X-DISCONTINUITY 包裹、且整组均为短分片(<5s)的区间（典型广告插槽）；
  *          无 DISCONTINUITY 时退化为丢弃 <1s 的极小分片
- * - strict：丢弃所有 <3s 的分片
+ * - strict：短片段 / 路径 / 异域规则，另检查有完整证据的短时异分辨率插播
  */
 
 import { HttpClient } from '../net/HttpClient';
@@ -16,6 +16,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { Utils } from '../common/Utils';
 import { AdDiagnostics, AdFilterTrace, AdSegmentDecision } from './AdDiagnostics';
+import { AdResolutionRule, ResolutionAdResult } from './AdResolutionRule';
 
 export interface MediaPlaylistResult {
   content: string;
@@ -57,7 +58,8 @@ export class M3u8Rewriter {
     'adcreative', 'admaster', 'doubleclick', '/guanggao', '/gg/'
   ];
 
-  static async rewrite(url: string, headers: Record<string, string>, mode: string, outDir: string): Promise<RewriteOutcome> {
+  static async rewrite(url: string, headers: Record<string, string>, mode: string, outDir: string,
+    wanted: () => boolean = () => true): Promise<RewriteOutcome> {
     let trace = AdDiagnostics.empty(mode, 'pending', url);
     let opened: fs.File | null = null;
     try {
@@ -65,6 +67,7 @@ export class M3u8Rewriter {
       let currentUrl = url;
       let text = '';
       for (let depth = 0; depth < 4; depth++) {
+        if (!wanted()) return M3u8Rewriter.fail('播放解析已取消', trace);
         // 与下载链路保持一致：按 Referer 逐级放宽，避免 CDN 防盗链直接 403
         trace.playlistUrl = AdDiagnostics.safeUrl(currentUrl);
         const res = await HttpClient.getTextResilient(currentUrl, 12000);
@@ -86,8 +89,9 @@ export class M3u8Rewriter {
         return M3u8Rewriter.fail('播放列表为空', trace);
       }
       // 2) 重写媒体播放列表
-      const rewritten = M3u8Rewriter.rewriteMediaPlaylist(text, currentUrl, mode);
+      const rewritten = await M3u8Rewriter.analyzeMediaPlaylist(text, currentUrl, mode, headers, wanted);
       trace = rewritten.trace;
+      if (!wanted()) return M3u8Rewriter.fail('播放解析已取消', trace);
       if (rewritten.segmentCount === 0) {
         return M3u8Rewriter.fail('播放列表中没有可分片的播放地址', trace);
       }
@@ -145,7 +149,18 @@ export class M3u8Rewriter {
     return bestUrl;
   }
 
-  static rewriteMediaPlaylist(content: string, baseUrl: string, mode: string): MediaPlaylistResult {
+  static async analyzeMediaPlaylist(content: string, baseUrl: string, mode: string, headers: Record<string, string>,
+    wanted: () => boolean = () => true): Promise<MediaPlaylistResult> {
+    let resolution: ResolutionAdResult = { matches: [], note: '' };
+    if (mode === 'strict' && wanted()) {
+      try { resolution = await AdResolutionRule.inspect(content, baseUrl, headers, wanted); }
+      catch (e) { resolution.note = '严格分辨率检查未完成，未增加删片。'; }
+    }
+    return M3u8Rewriter.rewriteMediaPlaylist(content, baseUrl, mode, resolution);
+  }
+
+  static rewriteMediaPlaylist(content: string, baseUrl: string, mode: string,
+    resolution: ResolutionAdResult = { matches: [], note: '' }): MediaPlaylistResult {
     const lines = content.split(/\r?\n/);
     const header: string[] = [];
     const segs: Segment[] = [];
@@ -308,6 +323,16 @@ export class M3u8Rewriter {
           }
         }
       }
+      if (mode === 'strict') {
+        for (const match of resolution.matches) {
+          if (!Number.isInteger(match.start) || !Number.isInteger(match.end) || match.start < 0 || match.end > segs.length || match.start >= match.end) continue;
+          for (let i = match.start; i < match.end; i++) {
+            dropFlags[i] = true;
+            reasons[i] = '严格规则：短时异分辨率插播（疑似），主样本 ' + match.mainWidth + '×' + match.mainHeight +
+              ' → ' + match.width + '×' + match.height + '，前后各两片恢复主尺寸；整个区间已逐片采样确认';
+          }
+        }
+      }
       // 兜底：全丢时保留全部
       let keptCount = 0;
       for (const d of dropFlags) {
@@ -356,8 +381,8 @@ export class M3u8Rewriter {
           out.push(M3u8Rewriter.rewriteUriAttr(t, baseUrl));
           mapEmitted = true;
         } else if (t.startsWith('#EXT-X-DISCONTINUITY')) {
-          // 丢弃广告组后不再保留其 DISCONTINUITY 标记
-          if (i === 0) {
+          // Resolution-based splicing must retain the decoder/timestamp boundary on return to the film.
+          if (i === 0 || (mode === 'strict' && resolution.matches.length > 0)) {
             out.push(t);
           }
         } else {
@@ -377,6 +402,7 @@ export class M3u8Rewriter {
       out.push('#EXT-X-ENDLIST');
     }
     const trace = AdDiagnostics.empty(mode, 'rewritten', baseUrl);
+    trace.note = mode === 'strict' ? resolution.note : '';
     trace.originalCount = segs.length;
     trace.filteredCount = filtered;
     trace.live = !hadEndList;

@@ -95,6 +95,14 @@ export class AvPlayerController {
   private superResolutionActive: boolean = false;
   private superResolutionEventSerial: number = 0;
   private superResolutionAvailable: boolean = true;
+  private srRequestSerial: number = 0;
+  private srWidth: number = 0;
+  private srHeight: number = 0;
+  private srActiveWidth: number = 0;
+  private srActiveHeight: number = 0;
+  private srSizeExcursion: boolean = false;
+  private srRecoveryAttempted: boolean = false;
+  private srRecoveryTimer: number = -1;
   onSuperResolutionState: (state: string) => void = () => {};
   onVideoInfo: (info: VideoStreamInfo) => void = () => {};
   private sourceGeneration: number = 0;
@@ -138,6 +146,8 @@ export class AvPlayerController {
   }
 
   configureSuperResolution(enabled: boolean, allowRuntimeToggle: boolean = enabled): void {
+    this.srRequestSerial++;
+    this.clearSrRecovery();
     this.superResolution = enabled;
     this.superResolutionFeature = enabled || allowRuntimeToggle;
     this.onSuperResolutionState(enabled ? 'requesting' : 'off');
@@ -149,19 +159,21 @@ export class AvPlayerController {
     if (player === null || !this.superResolutionFeature || !this.superResolutionAvailable ||
       !['initialized', 'prepared', 'playing', 'paused', 'completed', 'stopped'].includes(player.state)) return false;
     const generation = this.sourceGeneration;
+    const request = ++this.srRequestSerial;
+    this.clearSrRecovery();
     const eventSerial = this.superResolutionEventSerial;
     const previous = this.superResolution;
     this.superResolution = enabled;
     this.onSuperResolutionState(enabled ? 'requesting' : 'disabling');
     try {
       await player.setSuperResolution(enabled);
-      if (this.player !== player || generation !== this.sourceGeneration) return false;
+      if (this.player !== player || generation !== this.sourceGeneration || request !== this.srRequestSerial) return false;
       if (!enabled) this.onSuperResolutionState('off');
       else if (eventSerial === this.superResolutionEventSerial) {
         this.onSuperResolutionState('enabled');
         if (confirmAfterMissingCallback) {
           await new Promise<void>((resolve: () => void) => { setTimeout(resolve, 350); });
-          if (this.player !== player || generation !== this.sourceGeneration) return false;
+          if (this.player !== player || generation !== this.sourceGeneration || request !== this.srRequestSerial || !this.superResolution) return false;
           const source = this.currentSource;
           if (eventSerial === this.superResolutionEventSerial && source !== null &&
             (player.state === 'playing' || player.state === 'paused' || player.state === 'prepared')) {
@@ -174,7 +186,7 @@ export class AvPlayerController {
       // Enabling is confirmed only by superResolutionChanged(true), never by Promise fulfillment.
       return true;
     } catch (e) {
-      if (this.player !== player || generation !== this.sourceGeneration) return false;
+      if (this.player !== player || generation !== this.sourceGeneration || request !== this.srRequestSerial) return false;
       this.superResolution = previous;
       const error = e as BusinessError;
       if (error.code === 5410003 || error.code === 5410004) {
@@ -184,6 +196,30 @@ export class AvPlayerController {
       }
       return false;
     }
+  }
+
+  private clearSrRecovery(): void {
+    if (this.srRecoveryTimer >= 0) { clearTimeout(this.srRecoveryTimer); this.srRecoveryTimer = -1; }
+  }
+
+  private atActiveSrSize(): boolean {
+    return this.srActiveWidth > 0 && this.srWidth === this.srActiveWidth && this.srHeight === this.srActiveHeight;
+  }
+
+  /** Recover once after HLS returns to a size at which the native algorithm was actually active. */
+  private scheduleSrRecovery(player: media.AVPlayer): void {
+    if (this.player !== player || !this.superResolution || !this.superResolutionAvailable || this.superResolutionActive ||
+      !this.srSizeExcursion || !this.atActiveSrSize() || this.srRecoveryAttempted || this.srRecoveryTimer >= 0 ||
+      (player.state !== 'playing' && player.state !== 'paused')) return;
+    const generation = this.sourceGeneration;
+    this.srRecoveryTimer = setTimeout(() => {
+      this.srRecoveryTimer = -1;
+      if (this.player !== player || generation !== this.sourceGeneration || !this.superResolution || this.superResolutionActive ||
+        !this.superResolutionAvailable || !this.atActiveSrSize() || (player.state !== 'playing' && player.state !== 'paused')) return;
+      this.srRecoveryAttempted = true;
+      // Existing compatibility fallback reparses the same MediaSource with exact seek only if no state callback arrives.
+      this.setSuperResolution(true, true);
+    }, 300);
   }
 
 
@@ -315,24 +351,32 @@ export class AvPlayerController {
   /** 设置媒体源 → 等 initialized → 绑 Surface → prepare（顺序错会导致卡死无画面） */
   private async startSource(player: media.AVPlayer, source: media.MediaSource, seekMs: number,
     playWhenReady: boolean = this.autoPlay, preciseSeek: boolean = this.preciseResume): Promise<boolean> {
-    this.sourceGeneration++;
+    if (this.player !== player) return false;
+    const generation = ++this.sourceGeneration;
+    this.srRequestSerial++;
+    this.clearSrRecovery();
+    this.srWidth = 0; this.srHeight = 0; this.srActiveWidth = 0; this.srActiveHeight = 0;
+    this.srSizeExcursion = false; this.srRecoveryAttempted = false;
     this.infoReadId++;
     this.currentSource = null;
     this.onVideoInfo(AvPlayerController.emptyVideoInfo());
     this.superResolutionActive = false;
     let p: media.AVPlayer = player;
     let idle: boolean = await this.ensureIdle(p);
+    if (this.player !== p || generation !== this.sourceGeneration) return false;
     if (!idle) {
       // reset 抛错 / 迟迟回不到 idle：把播放器整个重建一遍再试。
       // 之前这里直接报「播放器状态异常，请重试」，用户看到的却是换源后
       // 立刻弹错误页 —— 明明还有一张底牌没打。重建能跨过绝大多数僵死态。
       const fresh: media.AVPlayer | null = await this.recreate(p);
+      if (generation !== this.sourceGeneration) return false;
       if (fresh === null) {
         this.onError('播放器状态异常，请重试');
         return false;
       }
       p = fresh;
       idle = await this.ensureIdle(p);
+      if (this.player !== p || generation !== this.sourceGeneration) return false;
       if (!idle) {
         this.onError('播放器状态异常，请重试');
         return false;
@@ -356,8 +400,11 @@ export class AvPlayerController {
       }
       this.superResolutionAvailable = false;
       this.onSuperResolutionState('unavailable');
-      if (!await this.ensureIdle(p)) {
+      const fallbackIdle = await this.ensureIdle(p);
+      if (this.player !== p || generation !== this.sourceGeneration) return false;
+      if (!fallbackIdle) {
         const fresh = await this.recreate(p);
+        if (generation !== this.sourceGeneration) return false;
         if (fresh === null) {
           this.onError('播放器初始化失败，请重试');
           return false;
@@ -367,6 +414,7 @@ export class AvPlayerController {
       p.setMediaSource(source, { preferredBufferDuration: 20 });
     }
     const ready: boolean = await this.waitForState(p, 'initialized', 8000);
+    if (this.player !== p || generation !== this.sourceGeneration) return false;
     if (!ready) {
       this.onError('视频源初始化超时，请重试或换源');
       return false;
@@ -380,6 +428,7 @@ export class AvPlayerController {
         return this.startSource(p, source, seekMs, playWhenReady, preciseSeek);
       }
     }
+    if (this.player !== p || generation !== this.sourceGeneration) return false;
     this.currentSource = source;
     try {
       p.audioRendererInfo = { usage: audio.StreamUsage.STREAM_USAGE_MOVIE, rendererFlags: 0 };
@@ -393,6 +442,7 @@ export class AvPlayerController {
    * 用于 reset 都救不回来的僵死态（换源连续失败时的典型现场）。
    */
   private async recreate(old: media.AVPlayer): Promise<media.AVPlayer | null> {
+    const generation = this.sourceGeneration;
     this.eventsBound = false;
     this.player = null;
     this.prepared = false;
@@ -403,6 +453,7 @@ export class AvPlayerController {
     }
     try {
       const fresh: media.AVPlayer = await media.createAVPlayer();
+      if (generation !== this.sourceGeneration) { try { fresh.release(); } catch (e) { /* Already disposed. */ } return null; }
       this.player = fresh;
       this.registerEvents(fresh);
       return fresh;
@@ -425,6 +476,11 @@ export class AvPlayerController {
             this.superResolutionActive = enabled;
             this.superResolutionEventSerial++;
             this.onSuperResolutionState(this.superResolution ? (enabled ? 'active' : 'inactive') : 'off');
+            if (enabled && this.srActiveWidth === 0 && this.srWidth > 0 && this.srHeight > 0) {
+              this.srActiveWidth = this.srWidth; this.srActiveHeight = this.srHeight;
+            }
+            if (enabled) this.clearSrRecovery();
+            else this.scheduleSrRecovery(player);
           }
         });
       } catch (e) {
@@ -433,6 +489,7 @@ export class AvPlayerController {
       }
     }
     player.on('stateChange', (state: media.AVPlayerState) => {
+      if (this.player !== player) return;
       switch (state) {
         case 'initialized':
           // reset / 换源后会重新回到 initialized，此时补绑 Surface
@@ -482,12 +539,21 @@ export class AvPlayerController {
       }
     });
     player.on('error', (err: BusinessError) => {
+      if (this.player !== player) return;
       if (this.player === player && this.loudnessPending && player.state !== 'error' &&
         [5400102, 5400105, 5400108].indexOf(err.code) >= 0) {
         this.loudnessFailed = true;
         return;
       }
       if (this.superResolutionFeature && (err.code === 5410003 || err.code === 5410004)) {
+        if (err.code === 5410003 && player.state !== 'error' && this.srActiveWidth > 0) {
+          // Rejection of an inserted size does not prove the original film/device lost SR support.
+          this.superResolutionActive = false;
+          if (!this.atActiveSrSize()) this.srSizeExcursion = true;
+          this.onSuperResolutionState(this.superResolution ? 'inactive' : 'off');
+          this.scheduleSrRecovery(player);
+          return;
+        }
         this.superResolutionAvailable = false;
         this.onSuperResolutionState('unavailable');
         // A nonfatal algorithm rejection must not hide an otherwise playing video.
@@ -513,10 +579,19 @@ export class AvPlayerController {
       }
     });
     player.on('videoSizeChange', (width: number, height: number) => {
-      if (this.player === player && (player.state === 'prepared' || player.state === 'playing' || player.state === 'paused')) {
+      if (this.player !== player) return;
+      if (player.state === 'prepared' || player.state === 'playing' || player.state === 'paused') {
         this.readVideoInfo(player);
       }
-      if (width > 0 && height > 0) {
+      if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        this.srWidth = width; this.srHeight = height;
+        if (this.superResolutionActive && this.srActiveWidth === 0) { this.srActiveWidth = width; this.srActiveHeight = height; }
+        if (this.srActiveWidth > 0 && !this.atActiveSrSize()) {
+          this.srSizeExcursion = true;
+          if (this.srRecoveryAttempted) this.srRequestSerial++;
+          this.srRecoveryAttempted = false;
+          this.clearSrRecovery();
+        } else this.scheduleSrRecovery(player);
         this.onVideoSize(width, height);
       }
     });
@@ -807,6 +882,8 @@ export class AvPlayerController {
 
   /** 释放播放器（页面销毁时调用） */
   release(): void {
+    this.srRequestSerial++;
+    this.clearSrRecovery();
     this.loudnessGeneration++;
     this.sourceGeneration++;
     this.infoReadId++;
@@ -832,6 +909,8 @@ export class AvPlayerController {
   }
 
   private releasePlayer(): void {
+    this.srRequestSerial++;
+    this.clearSrRecovery();
     const old = this.player;
     this.player = null;
     this.prepared = false;

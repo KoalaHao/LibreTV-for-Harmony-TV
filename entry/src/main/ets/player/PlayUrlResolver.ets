@@ -142,7 +142,8 @@ export class PlayUrlResolver {
    * @param adFilter off / loose / strict
    * @param outDir   重写后 m3u8 的沙箱目录
    */
-  static async resolve(rawUrl: string, adFilter: string, outDir: string): Promise<ResolvedPlayUrl> {
+  static async resolve(rawUrl: string, adFilter: string, outDir: string,
+    wanted: () => boolean = () => true): Promise<ResolvedPlayUrl> {
     // 采集站可能给分享页而不是直链，先转换一次；不是页面会原样返回
     const url: string = await PlayUrlResolver.resolveSharePage(rawUrl);
     const headers = PlayUrlResolver.headersFor(url);
@@ -157,7 +158,7 @@ export class PlayUrlResolver {
       return { kind: 'url', url: url, headers: headers, file: null, filteredCount: 0, error: '',
         trace: AdDiagnostics.empty(adFilter, 'off', url, '过滤已关闭；没有额外请求清单，无法估算当前分片。') };
     }
-    const outcome = await M3u8Rewriter.rewrite(url, headers, adFilter, outDir);
+    const outcome = await M3u8Rewriter.rewrite(url, headers, adFilter, outDir, wanted);
     if (!outcome.ok || outcome.file === null) {
       // 重写失败时退化为直链播放（不阻断观看）
       return fail(outcome.error, outcome.trace);
@@ -213,7 +214,7 @@ export class PlayUrlResolver {
         return { urls: [], error: '播放列表为空' };
       }
       const mode = adFilter === 'off' ? 'off' : adFilter;
-      const rewritten = M3u8Rewriter.rewriteMediaPlaylist(text, currentUrl, mode);
+      const rewritten = await M3u8Rewriter.analyzeMediaPlaylist(text, currentUrl, mode, headers);
       const urls: string[] = [];
       const lines = rewritten.content.split('\n');
       for (const line of lines) {

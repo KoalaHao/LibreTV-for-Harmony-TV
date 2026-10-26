@@ -1025,12 +1025,19 @@ export struct PlayerPage {
     this.buffering = true;
     const adScope = this.adScopeKey();
     this.adScope = adScope;
-    const resolved = await PlayUrlResolver.resolve(ep.url, this.settings.adFilter, this.cacheDir);
+    if (this.settings.adFilter === 'strict') {
+      this.loadingHint = '正在检查疑似广告分片…';
+      this.startWatchdog(PlayerPage.LOAD_TIMEOUT_MS + 10000);
+    }
+    const resolved = await PlayUrlResolver.resolve(ep.url, this.settings.adFilter, this.cacheDir,
+      () => !this.released && adScope === this.adScopeKey());
     if (this.released || adScope !== this.adScopeKey() || !this.adSession.update(adToken, resolved.trace)) {
       if (resolved.file !== null) { try { fs.closeSync(resolved.file.fd); } catch (e) { /* Discard stale results. */ } }
       return false;
     }
     this.refreshAdView(true);
+    this.loadingHint = '';
+    if (this.settings.adFilter === 'strict') this.startWatchdog();
     this.holderFile = resolved.file;
     // 让用户看得见广告过滤在工作；为 0 时不打扰（该源本来就没插广告）
     if (resolved.filteredCount > 0) {
@@ -1413,7 +1420,7 @@ export struct PlayerPage {
   }
 
   /** 起播看门狗：12 秒还没出画面，就当这一路加载失败 */
-  private startWatchdog(): void {
+  private startWatchdog(timeoutMs: number = PlayerPage.LOAD_TIMEOUT_MS): void {
     this.clearWatchdog();
     this.loadWatchdog = setTimeout(() => {
       this.loadWatchdog = -1;
@@ -1421,7 +1428,7 @@ export struct PlayerPage {
         return;
       }
       this.onPlaybackHang();
-    }, PlayerPage.LOAD_TIMEOUT_MS);
+    }, timeoutMs);
   }
 
   private clearWatchdog(): void {

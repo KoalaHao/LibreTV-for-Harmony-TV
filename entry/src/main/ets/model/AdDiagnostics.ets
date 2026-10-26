@@ -112,6 +112,7 @@ export class AdDiagnostics {
       result.note = trace.live ? '动态清单会更新，不估算当前分片。' :
         (trace.timelineUsable ? '按过滤后清单时长估算，非播放器请求回调；时间戳、续播及 seek 可能产生偏差。' :
           '清单时长缺失或超出诊断上限，无法可靠估算。');
+      if (trace.note !== '') result.note = trace.note + '\n' + result.note;
     }
     if (trace.status === 'rewritten' && !trace.live && trace.timelineUsable && AdDiagnostics.durationMismatch(trace, durationMs)) {
       result.note = '播放器时长与过滤后清单明显不一致，暂不估算当前分片。';

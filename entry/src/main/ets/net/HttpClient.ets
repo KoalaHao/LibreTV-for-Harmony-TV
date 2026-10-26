@@ -45,6 +45,15 @@ export class HttpClient {
       timeoutMs, true, false, 512 * 1024);
   }
 
+  /** Strict ad detection needs only TS/SPS headers; never download a complete video segment. */
+  static async getVideoPrefix(url: string, headers: Record<string, string>, timeoutMs: number): Promise<HttpResult> {
+    const requestHeaders: Record<string, string> = {};
+    for (const key of Object.keys(headers)) requestHeaders[key] = headers[key];
+    requestHeaders['Range'] = 'bytes=0-16383';
+    requestHeaders['Accept-Encoding'] = 'identity';
+    return await HttpClient.get(url, requestHeaders, timeoutMs, true, false, 16384);
+  }
+
   static async head(url: string, timeoutMs: number = 4000): Promise<HttpResult> {
     return await HttpClient.get(url, { 'User-Agent': HttpClient.UA }, timeoutMs, true, false, 4096, http.RequestMethod.HEAD);
   }
