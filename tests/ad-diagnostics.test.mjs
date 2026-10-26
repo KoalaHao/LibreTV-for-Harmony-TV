@@ -7,7 +7,7 @@ globalThis.__adModels=ad;
 let response={ok:true,text:'',error:''},failWrite=false;
 globalThis.__adPlatform={
  HttpClient:{getTextResilient:async()=>response},
- fs:{mkdirSync(){},openSync(){return {fd:1};},writeSync(){if(failWrite)throw Error('disk full');},closeSync(){},OpenMode:{READ_WRITE:1,CREATE:2,TRUNC:4}},
+ fs:{accessSync(){return false;},mkdirSync(){},openSync(){return {fd:1};},writeSync(){if(failWrite)throw Error('disk full');},closeSync(){},OpenMode:{READ_WRITE:1,CREATE:2,TRUNC:4}},
  util:{TextEncoder:{create:()=>({encodeInto:text=>new TextEncoder().encode(text)})}}
 };
 const {M3u8Rewriter:R}=await loadEts('model/M3u8Rewriter.ets',[[/^import .*;$/gm,''],[/^/,`const Utils=globalThis.__adUtils;const {AdDiagnostics}=globalThis.__adModels;const {HttpClient,fs,util}=globalThis.__adPlatform;\n`]]);
@@ -80,4 +80,11 @@ test('a significant player/manifest duration mismatch suppresses misleading segm
  assert.equal(D.locate(trace,19000,30500),5);
  const context={sourceKey:'a',vodId:'42',title:'影片',episode:0,episodeName:'',lineIndex:0};
  const report=D.report(trace,19000,context,34000);assert.equal(report.estimatedSegment,-1);assert.equal(report.playerDurationMs,34000);
+});
+test('reopening an existing play directory does not invoke mkdir and still writes a filtered playlist',async()=>{
+ const kit=globalThis.__adPlatform,oldAccess=kit.fs.accessSync,oldMkdir=kit.fs.mkdirSync;
+ let mkdirCalls=0;kit.fs.accessSync=()=>true;kit.fs.mkdirSync=()=>{mkdirCalls++;throw {code:13900015};};
+ response={ok:true,text:playlist(original),error:''};
+ try{const result=await R.rewrite(base,{},'loose','/existing/play');assert.equal(result.ok,true);assert.equal(result.filteredCount,2);assert.equal(mkdirCalls,0);}
+ finally{kit.fs.accessSync=oldAccess;kit.fs.mkdirSync=oldMkdir;}
 });

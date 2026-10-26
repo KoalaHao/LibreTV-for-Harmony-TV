@@ -2071,11 +2071,19 @@ export struct PlayerPage {
     } catch (e) { this.toast('复制失败，本机记录仍保留'); }
   }
 
+  private adFieldValue(key: string): string {
+    if (key === 'state') return this.adView.state + '\n' + this.adView.summary;
+    if (key === 'current') return this.adView.current;
+    if (key === 'location') return this.adView.location;
+    if (key === 'changes') return this.adView.changes;
+    return this.adView.reason;
+  }
+
   @Builder
-  private adField(label: string, value: string) {
+  private adField(label: string, key: string) {
     Column({ space: 5 }) {
       Text(label).fontSize(12).fontColor('#9CAEC6').width('100%')
-      Text(value).fontSize(14).fontColor('#ECF1F8').width('100%').wordBreak(WordBreak.BREAK_ALL)
+      Text(this.adFieldValue(key)).fontSize(14).fontColor('#ECF1F8').width('100%').wordBreak(WordBreak.BREAK_ALL)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
 
@@ -2090,11 +2098,11 @@ export struct PlayerPage {
         }.width('100%')
         Scroll() {
           Column({ space: 14 }) {
-            this.adField('过滤实际状态', this.adView.state + '\n' + this.adView.summary)
-            this.adField('当前分片（估算）', this.adView.current)
-            this.adField('来源与文件', this.adView.location)
-            this.adField('相邻变化', this.adView.changes)
-            this.adField('保留原因', this.adView.reason)
+            this.adField('过滤实际状态', 'state')
+            this.adField('当前分片（估算）', 'current')
+            this.adField('来源与文件', 'location')
+            this.adField('相邻变化', 'changes')
+            this.adField('保留原因', 'reason')
             Text(this.adView.note).fontSize(12).fontColor('#D4BB8E').width('100%')
             if (this.adView.nearby.length > 0) {
               Text('附近原清单分片').fontSize(14).fontColor('#9CAEC6').width('100%')

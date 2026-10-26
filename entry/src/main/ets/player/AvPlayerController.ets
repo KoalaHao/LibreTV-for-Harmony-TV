@@ -76,12 +76,16 @@ export class AvPlayerController {
       this.loudnessFailed = false;
       this.onLoudnessState('applying', value);
       let applied = false;
+      let timer = -1;
       try {
         if (typeof player.setLoudnessGain !== 'function') throw new Error('Loudness gain unavailable');
-        await player.setLoudnessGain(value);
-        applied = !this.loudnessFailed;
+        const command = player.setLoudnessGain(value).then((): boolean => true, (): boolean => false);
+        const timeout = new Promise<boolean>((resolve: (value: boolean) => void) => {
+          timer = setTimeout(() => resolve(false), 1000);
+        });
+        applied = await Promise.race([command, timeout]) && !this.loudnessFailed;
       } catch (e) { applied = false; }
-      finally { this.loudnessPending = false; }
+      finally { if (timer >= 0) clearTimeout(timer); this.loudnessPending = false; }
       if (this.player !== player || generation !== this.loudnessGeneration) return false;
       if (!applied) this.loudnessGainDb = previous;
       this.onLoudnessState(applied ? 'applied' : 'unavailable', value);
@@ -507,7 +511,7 @@ export class AvPlayerController {
             // ignore
           }
           this.onPrepared(this.lastDurationMs);
-          const loudnessReady = this.setLoudnessGain(this.loudnessGainDb);
+          this.setLoudnessGain(this.loudnessGainDb);
           if (this.pendingSeekMs > 0) {
             const target = this.pendingSeekMs;
             this.pendingSeekMs = 0;
@@ -517,7 +521,8 @@ export class AvPlayerController {
               // seek 失败不阻塞播放
             }
           }
-          loudnessReady.then(() => {
+          // Issue gain first, but a missing optional audio-service response must never block play.
+          Promise.resolve().then(() => {
             if (this.player === player && player.state === 'prepared' && this.wantPlay) this.play();
           });
           break;

@@ -14,6 +14,7 @@
 import { HttpClient } from '../net/HttpClient';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { Utils } from '../common/Utils';
 import { AdDiagnostics, AdFilterTrace, AdSegmentDecision } from './AdDiagnostics';
 import { AdResolutionRule, ResolutionAdResult } from './AdResolutionRule';
@@ -62,6 +63,7 @@ export class M3u8Rewriter {
     wanted: () => boolean = () => true): Promise<RewriteOutcome> {
     let trace = AdDiagnostics.empty(mode, 'pending', url);
     let opened: fs.File | null = null;
+    let stage = '读取播放清单';
     try {
       // 1) 逐级解析主播放列表，选最高码率变体
       let currentUrl = url;
@@ -89,6 +91,7 @@ export class M3u8Rewriter {
         return M3u8Rewriter.fail('播放列表为空', trace);
       }
       // 2) 重写媒体播放列表
+      stage = '分析播放分片';
       const rewritten = await M3u8Rewriter.analyzeMediaPlaylist(text, currentUrl, mode, headers, wanted);
       trace = rewritten.trace;
       if (!wanted()) return M3u8Rewriter.fail('播放解析已取消', trace);
@@ -96,8 +99,10 @@ export class M3u8Rewriter {
         return M3u8Rewriter.fail('播放列表中没有可分片的播放地址', trace);
       }
       // 3) 写入沙箱（文件句柄保持打开，供 fd:// 播放）
-      fs.mkdirSync(outDir, true);
+      stage = '创建播放目录';
+      if (!fs.accessSync(outDir)) fs.mkdirSync(outDir, true);
       const localPath = outDir + '/index.m3u8';
+      stage = '写入播放清单';
       const file = fs.openSync(localPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       opened = file;
       const encoder = util.TextEncoder.create('utf-8');
@@ -114,7 +119,9 @@ export class M3u8Rewriter {
       };
     } catch (e) {
       if (opened !== null) { try { fs.closeSync(opened.fd); } catch (e) { /* Preserve direct-play fallback. */ } }
-      return M3u8Rewriter.fail('重写播放列表失败: ' + e, trace);
+      const code = (e as BusinessError).code;
+      return M3u8Rewriter.fail('重写播放列表失败: ' + e, trace,
+        stage + '失败（错误码 ' + (typeof code === 'number' ? code.toString() : '未知') + '）；已回退原地址播放。');
     }
   }
 

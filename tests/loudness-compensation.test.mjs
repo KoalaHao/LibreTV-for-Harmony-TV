@@ -38,3 +38,11 @@ test('a late gain result for a previous video cannot publish into the newly conf
  assert.equal(await old,false);assert.deepEqual(states,[['applying',6]]);
  c.release();assert.equal(await c.setLoudnessGain(12),false);
 });
+test('an audio service that never answers cannot block autoplay or leave gain controls pending forever',async()=>{
+ const {c,p,calls}=await setup();const states=[];c.onLoudnessState=(s,v)=>states.push([s,v]);
+ p.setLoudnessGain=v=>{calls.push(['gain',v]);return new Promise(()=>{});};
+ await c.playUrl('https://media.test/hung-gain.m3u8',{});p.state='prepared';p.listeners.get('stateChange')('prepared');
+ await flush();assert.deepEqual(calls,[['gain',0],['play']]);assert.equal(p.state,'playing');
+ await new Promise(resolve=>setTimeout(resolve,1100));assert.deepEqual(states.at(-1),['unavailable',0]);
+ p.setLoudnessGain=async v=>calls.push(['gain',v]);assert.equal(await c.setLoudnessGain(6),true);c.release();
+});
