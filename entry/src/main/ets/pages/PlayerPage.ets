@@ -2327,48 +2327,52 @@ export struct PlayerPage {
 
   @Builder
   private tvPlaybackControls() {
-    Row({ space: 18 }) {
-      Column({ space: 3 }) {
-        Text(this.titleLabel()).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
-          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.offlineDir !== '' ? '离线缓存 · ' + this.episodeName : this.episodeName + ' · ' + this.infoSourceName())
-          .fontSize(11).fontColor('#CCCCCC').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.timeLabel()).fontSize(11).fontColor('#C7CDD7').maxLines(1)
-      }.width('23%').alignItems(HorizontalAlign.Start)
-      Column({ space: 7 }) {
-        Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.End, alignItems: ItemAlign.Center }) {
-          this.playbackActionItems()
-          Text('广告诊断').fontSize(12).fontColor('#E2EBF8')
-            .padding({ left: 11, right: 11 }).height(30).textAlign(TextAlign.Center)
-            .backgroundColor('#5037475D').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
-            .margin({ left: 6 })
-            .onClick(() => { this.openAdDiagnostics(); })
-          Image($r('app.media.ic_player_back')).width(30).height(30).padding(6).fillColor(Color.White)
-            .backgroundColor('#26FFFFFF').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
-            .accessibilityText('返回上一级').margin({ left: 6 })
-            .onClick(() => { this.back(); })
-        }.width('100%')
-        Row({ space: 10 }) {
-          Text(this.sourceVideoLabel()).fontSize(12).fontColor('#E0E5EF').maxLines(1)
-          if (this.sourceCodecLabel() !== '') {
-            Text(this.sourceCodecLabel()).fontSize(11).fontColor('#BBC3D0').maxLines(1)
-          }
-          Text(this.superResolutionLabel()).fontSize(11)
-            .fontColor(this.superResolutionState === 'active' ? '#90E8B3' : '#BBC3D0').maxLines(1)
-        }.width('100%').justifyContent(FlexAlign.End)
-      }.layoutWeight(1).alignItems(HorizontalAlign.End)
-    }.width('100%').alignItems(VerticalAlign.Top)
-      .padding({ left: 16, right: 16, top: 10, bottom: 10 })
-      .backgroundColor('#66000000').backgroundEffect({ radius: 20, saturation: 1.4 })
-      .borderRadius({ bottomLeft: 20, bottomRight: 20 }).align(Alignment.Top)
-    Column() {
-      Slider({ value: this.sliderValue, min: 0, max: this.sliderMaxValue(), style: SliderStyle.OutSet })
-        .width('100%').height(24).blockSize({ width: 14, height: 14 }).trackThickness(3)
-        .blockColor($r('app.color.color_primary')).selectedColor($r('app.color.color_primary')).trackColor('#555B66')
-        .accessibilityText('播放进度')
-        .onChange((value: number, mode: SliderChangeMode) => { this.onSliderChange(value, mode); })
-    }.width('100%').padding({ left: 16, right: 16, top: 2, bottom: 8 })
-      .backgroundColor('#33000000').align(Alignment.Bottom)
+    // Layout only: default child regions handle controls, while the middle passes through to video.
+    Column({ space: 0 }) {
+      Row({ space: 18 }) {
+        Column({ space: 3 }) {
+          Text(this.titleLabel()).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.offlineDir !== '' ? '离线缓存 · ' + this.episodeName : this.episodeName + ' · ' + this.infoSourceName())
+            .fontSize(11).fontColor('#CCCCCC').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.timeLabel()).fontSize(11).fontColor('#C7CDD7').maxLines(1)
+        }.width('23%').alignItems(HorizontalAlign.Start)
+        Column({ space: 7 }) {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.End, alignItems: ItemAlign.Center }) {
+            this.playbackActionItems()
+            Text('广告诊断').fontSize(12).fontColor('#E2EBF8')
+              .padding({ left: 11, right: 11 }).height(30).textAlign(TextAlign.Center)
+              .backgroundColor('#5037475D').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
+              .margin({ left: 6 })
+              .onClick(() => { this.openAdDiagnostics(); })
+            Image($r('app.media.ic_player_back')).width(30).height(30).padding(6).fillColor(Color.White)
+              .backgroundColor('#26FFFFFF').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
+              .accessibilityText('返回上一级').margin({ left: 6 })
+              .onClick(() => { this.back(); })
+          }.width('100%')
+          Row({ space: 10 }) {
+            Text(this.sourceVideoLabel()).fontSize(12).fontColor('#E0E5EF').maxLines(1)
+            if (this.sourceCodecLabel() !== '') {
+              Text(this.sourceCodecLabel()).fontSize(11).fontColor('#BBC3D0').maxLines(1)
+            }
+            Text(this.superResolutionLabel()).fontSize(11)
+              .fontColor(this.superResolutionState === 'active' ? '#90E8B3' : '#BBC3D0').maxLines(1)
+          }.width('100%').justifyContent(FlexAlign.End)
+        }.layoutWeight(1).alignItems(HorizontalAlign.End)
+      }.width('100%').alignItems(VerticalAlign.Top)
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .backgroundColor('#66000000').backgroundEffect({ radius: 20, saturation: 1.4 })
+        .borderRadius({ bottomLeft: 20, bottomRight: 20 }).hitTestBehavior(HitTestMode.Default)
+      Blank().layoutWeight(1).hitTestBehavior(HitTestMode.None)
+      Column() {
+        Slider({ value: this.sliderValue, min: 0, max: this.sliderMaxValue(), style: SliderStyle.OutSet })
+          .width('100%').height(24).blockSize({ width: 14, height: 14 }).trackThickness(3)
+          .blockColor($r('app.color.color_primary')).selectedColor($r('app.color.color_primary')).trackColor('#555B66')
+          .accessibilityText('播放进度')
+          .onChange((value: number, mode: SliderChangeMode) => { this.onSliderChange(value, mode); })
+      }.width('100%').padding({ left: 16, right: 16, top: 2, bottom: 8 })
+        .backgroundColor('#33000000').hitTestBehavior(HitTestMode.Default)
+    }.width('100%').height('100%').hitTestBehavior(HitTestMode.None)
   }
 
   private handleBack(): void {
