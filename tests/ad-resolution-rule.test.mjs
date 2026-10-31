@@ -62,7 +62,7 @@ test('irregular durations alone never trigger the new rule',async()=>{
  const p=setup({ad:filmSps}),result=await inspect(p);
  assert.deepEqual(result.matches,[]);assert.ok(calls.length>0);
  const now=await M.analyzeMediaPlaylist(p.text,p.base,'strict',{}),old=M.rewriteMediaPlaylist(p.text,p.base,'strict');
- assert.equal(now.content,old.content);assert.equal(now.filteredCount,2);
+ assert.equal(now.content,old.content);assert.equal(now.filteredCount,0);
 });
 test('strict filtering also covers same-aspect insertions with a different encoded resolution',async()=>{
  const p=setup({film:baselineSps(1920,1080),ad:baselineSps(1280,720)});

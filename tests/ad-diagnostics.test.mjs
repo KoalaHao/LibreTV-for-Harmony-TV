@@ -61,10 +61,18 @@ test('removal decisions preserve the original sequence and map playback time on 
 test('strict, loose ungrouped, and all-removed protection retain the actual rule explanation',()=>{
  const items=[{dur:.5,uri:'a.ts'},{dur:2,uri:'b.ts'},{dur:6,uri:'c.ts'}];
  const loose=rewrite(items);assert.deepEqual(loose.trace.segments.map(s=>s.dropped),[true,false,false]);
- const strict=rewrite(items,'strict');assert.deepEqual(strict.trace.segments.map(s=>s.dropped),[true,true,false]);
- assert.match(strict.trace.segments[1].reason,/不足 3 秒/);
- const protectedList=rewrite([{dur:.5,uri:'a.ts'},{dur:.5,uri:'b.ts'}],'strict');
+ const strict=rewrite(items,'strict');assert.deepEqual(strict.trace.segments.map(s=>s.dropped),[false,false,false]);
+ assert.match(strict.trace.segments[1].reason,/时长本身不作为广告证据/);
+ const protectedList=rewrite([{dur:.5,uri:'https://ad.test/ads/a.ts'},{dur:.5,uri:'https://ad.test/ads/b.ts'}],'strict');
  assert.equal(protectedList.filteredCount,0);assert.ok(protectedList.trace.segments.every(s=>!s.dropped&&s.reason.includes('保护回退')));
+});
+test('strict playback preserves ordinary 2.9-second, short and tiny movie fragments without independent ad evidence',()=>{
+ const items=[2.9,2.84,.5,1,2.933,6].map((dur,i)=>({dur,uri:`https://film.test/${i}.ts`}));
+ for(const disc of [false,true]){
+  const out=rewrite(items.map((s,i)=>({...s,disc:disc&&i===3})),'strict');
+  assert.equal(out.filteredCount,0);assert.equal(out.trace.filteredMs,0);assert.equal(out.segmentCount,items.length);
+  assert.ok(out.trace.segments.every(s=>!s.dropped));
+ }
 });
 test('domain changes remain observations, not proof of advertising',()=>{
  const result=rewrite([{dur:6,uri:'https://a.test/1.ts'},{dur:6,uri:'https://b.test/2.ts'}]);

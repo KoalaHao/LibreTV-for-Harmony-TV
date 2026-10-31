@@ -94,6 +94,7 @@ export struct PlayerPage {
   private readonly adSession: AdDiagnosticSession = new AdDiagnosticSession();
   private readonly adSkips: AdSkipNotifier = new AdSkipNotifier();
   @State private adSkipNotice: string = '';
+  @State private adSkipRule: string = '';
   private adSkipTimer: number = -1;
   private adScope: string = '';
   private lastAdRefreshAt: number = 0;
@@ -573,7 +574,7 @@ export struct PlayerPage {
     };
     this.player.onProgress = (positionMs: number, durationMs: number) => {
       const skippedMs = this.adSkips.update(positionMs, this.playing, durationMs);
-      if (skippedMs > 0 && !this.released) this.showAdSkipNotice(skippedMs);
+      if (skippedMs > 0 && !this.released) this.showAdSkipNotice(skippedMs, this.adSkips.ruleLabel());
       // 持续记录当前位置：画中画进出或画面重建导致重新 create 时，
       // startPlay 会用它做续播点；不记的话会跳回进页面时的老位置。
       this.positionMs = positionMs;
@@ -2074,16 +2075,18 @@ export struct PlayerPage {
     this.adView = AdDiagnostics.view(this.adSession.current(), this.positionMs, this.durationMs);
   }
 
-  private showAdSkipNotice(durationMs: number): void {
+  private showAdSkipNotice(durationMs: number, rule: string): void {
     if (this.adSkipTimer >= 0) clearTimeout(this.adSkipTimer);
     const text = '广告过滤 · 跳过 ' + (durationMs / 1000).toFixed(1) + ' 秒';
-    this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => { this.adSkipNotice = text; });
+    this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+      this.adSkipNotice = text; this.adSkipRule = rule;
+    });
     this.adSkipTimer = setTimeout(() => {
       this.adSkipTimer = -1;
       if (!this.released) {
         this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, () => { this.adSkipNotice = ''; });
       }
-    }, 3000);
+    }, 4000);
   }
 
   private openAdDiagnostics(): void {
@@ -2893,17 +2896,21 @@ export struct PlayerPage {
           }
         }
 
+        if (this.showAdDiagnostics) this.adDiagnosticPanel()
         if (this.adSkipNotice !== '') {
           Column() {
-            Text(this.adSkipNotice).fontSize(17).fontColor('#EDF4FF')
-              .padding({ left: 22, right: 22, top: 12, bottom: 12 })
+            Column({ space: 5 }) {
+              Text(this.adSkipNotice).fontSize(17).fontColor('#EDF4FF').hitTestBehavior(HitTestMode.None)
+              Text('规则：' + this.adSkipRule).fontSize(13).fontColor('#C7D7EA').maxLines(2)
+                .textAlign(TextAlign.Center).hitTestBehavior(HitTestMode.None)
+            }.padding({ left: 22, right: 22, top: 12, bottom: 12 })
+              .constraintSize({ maxWidth: Math.min(600, this.canvasW > 0 ? this.canvasW - 48 : 600) })
               .backgroundColor('#D91C2635').backgroundEffect({ radius: 16 }).borderRadius(24)
               .shadow({ radius: 14, color: '#66000000', offsetY: 4 })
               .transition(TransitionEffect.OPACITY).hitTestBehavior(HitTestMode.None)
           }.width('100%').height('100%').padding({ top: 88 })
             .alignItems(HorizontalAlign.Center).hitTestBehavior(HitTestMode.None)
         }
-        if (this.showAdDiagnostics) this.adDiagnosticPanel()
 
         // 滑屏调节的浮层提示（音量改由系统音量面板呈现，这里只留亮度）
         if (this.adjustKind === 'brightness') {

@@ -8,7 +8,7 @@
  * 广告判定（与 LibreTV「严格 / 宽松」两档对齐）：
  * - loose：丢弃被 #EXT-X-DISCONTINUITY 包裹、且整组均为短分片(<5s)的区间（典型广告插槽）；
  *          无 DISCONTINUITY 时退化为丢弃 <1s 的极小分片
- * - strict：短片段 / 路径 / 异域规则，另检查有完整证据的短时异分辨率插播
+ * - strict：路径 / 异域规则，另检查有完整证据的短时音视频格式突变，不凭单片时长删除
  */
 
 import { HttpClient } from '../net/HttpClient';
@@ -46,8 +46,6 @@ interface Segment {
 export class M3u8Rewriter {
   /** 整组短分片视为广告组的阈值（秒） */
   static readonly AD_RUN_MAX_DUR = 5.0;
-  /** strict 模式单分片阈值（秒） */
-  static readonly AD_SEG_MAX_DUR = 3.0;
   /** 无 DISCONTINUITY 时的极小分片阈值（秒） */
   static readonly TINY_SEG_DUR = 1.0;
   /**
@@ -317,10 +315,10 @@ export class M3u8Rewriter {
         }
       } else {
         for (let i = 0; i < segs.length; i++) {
-          if (segs[i].dur < M3u8Rewriter.AD_SEG_MAX_DUR || isAdUri(segs[i].uri)) {
+          if (isAdUri(segs[i].uri)) {
             dropFlags[i] = true;
-            reasons[i] = isAdUri(segs[i].uri) ? '命中广告路径关键词' : '严格规则：时长不足 3 秒';
-          } else reasons[i] = '时长不少于 3 秒，未命中广告路径或整组异域规则';
+            reasons[i] = '命中广告路径关键词';
+          } else reasons[i] = '未命中广告路径或整组异域规则；分片时长本身不作为广告证据';
         }
         // strict：整组外源的 DIS 区间也丢
         if (runRanges.length > 1 && mainCount >= 3) {

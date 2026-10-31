@@ -36,3 +36,12 @@ test('multiple cuts crossed in one normal progress update aggregate without queu
   {startMs:11000,endMs:20000,durationMs:9000,dropped:false});
  const n=new N();n.configure(t);n.anchor(9000);assert.equal(n.update(11500,true,20000),24067);
 });
+test('skip notices expose the actual audio, resolution or path rule rather than treating duration as proof',()=>{
+ for(const [reason,label] of [
+  ['严格规则：短时异采样率插播（疑似），主音轨 48000 Hz → 44100 Hz，前后各两片恢复主音轨','音轨采样率 48 → 44.1 kHz，前后恢复'],
+  ['严格规则：短时异分辨率插播（疑似），主样本 1918×802 → 1920×1080，前后恢复','分辨率 1918×802 → 1920×1080，前后恢复'],
+  ['命中广告路径关键词','广告路径匹配'],['分组全部来自其他域名','整组来自其他域名']]){
+  const t=trace();for(const s of t.segments)if(s.dropped)s.reason=reason;
+  const n=new N();n.configure(t);n.anchor(9000);assert.equal(n.update(10100,true,20000),19067);assert.equal(n.ruleLabel(),label);
+ }
+});
