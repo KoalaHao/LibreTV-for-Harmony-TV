@@ -147,6 +147,7 @@ export struct PlayerPage {
   @State private sourceVideoInfo: VideoStreamInfo = AvPlayerController.emptyVideoInfo();
   @State private qualityEnabled: boolean = SettingsStore.shared().get().superResolution;
   @State private qualityBusy: boolean = false;
+  @State private syncBusy: boolean = false;
   @State showEpisodes: boolean = false;
   @State showSpeeds: boolean = false;
   @State showSources: boolean = false;
@@ -494,6 +495,7 @@ export struct PlayerPage {
     this.settings = SettingsStore.shared().get();
     this.qualityEnabled = this.settings.superResolution;
     this.qualityBusy = false;
+    this.syncBusy = false;
     this.player.configureSuperResolution(DevicePolicy.isTV() && this.qualityEnabled, DevicePolicy.isTV());
     this.speedValue = this.initialSpeed > 0 ? this.initialSpeed : this.settings.defaultSpeed;
     this.player.configureAutoPlay(this.playWhenReady, this.initialSpeed > 0);
@@ -2304,6 +2306,31 @@ export struct PlayerPage {
     return label;
   }
 
+  private async realignPlayback(): Promise<void> {
+    if (this.syncBusy || this.qualityBusy || this.adFilterBusy || this.starting || this.playPending ||
+      !this.hasStarted || this.released) return;
+    const scope = this.adScopeKey();
+    this.syncBusy = true;
+    this.controlsVisible = true;
+    this.showEpisodes = false; this.showSpeeds = false; this.showSources = false; this.showAdDiagnostics = false;
+    this.hasStarted = false;
+    this.showLoading = true;
+    this.loadingHint = '正在重新对齐音画…';
+    this.clearStall();
+    this.adSkips.anchor(this.player.currentTime());
+    try {
+      const ok = await this.player.realignPlayback();
+      if (this.released || scope !== this.adScopeKey()) return;
+      if (!ok) { this.hasStarted = true; this.showLoading = false; this.toast('重新准备失败，请退出后继续播放'); }
+    } finally {
+      if (!this.released && scope === this.adScopeKey()) {
+        this.syncBusy = false;
+        this.loadingHint = '';
+        this.scheduleHideControls();
+      }
+    }
+  }
+
   private sourceCodecLabel(): string {
     const info = this.sourceVideoInfo;
     let codec = info.codec.replace('video/', '');
@@ -2324,6 +2351,13 @@ export struct PlayerPage {
       .accessibilityText('当前片源影片的' + this.loudnessLabel() + '，点击依次选择关闭、加十二分贝、加二十四分贝')
       .onClick(() => { this.cycleLoudness(); })
     if (DevicePolicy.isTV()) {
+      Text(this.syncBusy ? '重新对齐…' : '音画同步')
+        .fontSize(12).fontColor('#FFFFFF').backgroundColor('#35465D').borderRadius(15)
+        .height(30).padding({ left: 11, right: 11 }).textAlign(TextAlign.Center)
+        .focusable(true).focusBox(TV_FOCUS).margin({ left: 6, top: 2, bottom: 2 })
+        .enabled(!this.syncBusy && !this.qualityBusy && !this.adFilterBusy && this.hasStarted && this.errorText === '')
+        .accessibilityText('重新对齐音画，重建音视频通路并从当前进度继续')
+        .onClick(() => { this.realignPlayback(); })
       Text(this.qualityBusy ? '鸿鹄画质 · 切换中' : ('鸿鹄画质 · ' + (this.qualityEnabled ? '开' : '关')))
         .fontSize(13).fontColor(this.qualityEnabled ? '#A8EBC3' : '#FFFFFF')
         .backgroundColor(this.qualityEnabled ? '#38439165' : '#26FFFFFF')

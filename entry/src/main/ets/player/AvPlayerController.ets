@@ -55,6 +55,24 @@ export class AvPlayerController {
     this.preciseResume = preciseResume;
   }
   wantsAutoPlay(): boolean { return this.autoPlay; }
+
+  /** Manual recovery: rebuild both sinks, then resume the same MediaSource at the current content position. */
+  async realignPlayback(): Promise<boolean> {
+    const player = this.player;
+    const source = this.currentSource;
+    if (player === null || source === null || ['prepared', 'playing', 'paused'].indexOf(player.state) < 0) return false;
+    const position = this.currentTime();
+    const playing = player.state === 'playing';
+    this.autoPlay = playing;
+    const generation = ++this.sourceGeneration;
+    this.infoReadId++;
+    this.srRequestSerial++;
+    this.clearSrRecovery();
+    this.clearAudioGainRefresh();
+    const fresh = await this.recreate(player);
+    if (fresh === null || this.player !== fresh || this.sourceGeneration !== generation) return false;
+    return await this.startSource(fresh, source, position, playing, true);
+  }
   private lastDurationMs: number = 0;
   /**
    * 播放音量（0~1）。
@@ -563,10 +581,11 @@ export class AvPlayerController {
     this.player = null;
     this.prepared = false;
     try {
-      old.release();
+      await old.release();
     } catch (e) {
       // 释放失败也要继续，创建新实例才是目的
     }
+    if (generation !== this.sourceGeneration) return null;
     try {
       const fresh: media.AVPlayer = await media.createAVPlayer();
       if (generation !== this.sourceGeneration) { try { fresh.release(); } catch (e) { /* Already disposed. */ } return null; }

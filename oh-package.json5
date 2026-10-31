@@ -1,7 +1,7 @@
 {
   "modelVersion": "26.0.0",
   "name": "libretv-harmony-tv",
-  "version": "1.10.0-tv.35",
+  "version": "1.10.0-tv.36",
   "description": "LibreTV for Harmony TV — API 24+ television client",
   "main": "",
   "author": "LibreTV Community",
