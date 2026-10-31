@@ -341,6 +341,7 @@ export class AvPlayerController {
   /** UI 回调（由页面赋值） */
   onPrepared: (durationMs: number) => void = () => {};
   onProgress: (positionMs: number, durationMs: number) => void = () => {};
+  onSeekDone: (positionMs: number) => void = () => {};
   onPlayStateChanged: (playing: boolean) => void = () => {};
   onCompleted: () => void = () => {};
   onError: (message: string) => void = () => {};
@@ -695,6 +696,7 @@ export class AvPlayerController {
     player.on('seekDone', (time: number) => {
       // Paused prepare/seek does not emit a later timeUpdate until playback resumes.
       if (this.player === player && Number.isFinite(time) && time >= 0) {
+        this.onSeekDone(time);
         this.onProgress(time, this.lastDurationMs);
       }
     });

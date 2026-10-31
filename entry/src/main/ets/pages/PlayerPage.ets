@@ -13,6 +13,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { AdDiagnostics, AdDiagnosticSession, AdDiagnosticView, AdReportContext } from '../model/AdDiagnostics';
 import { AdFilterTimeline } from '../model/AdFilterTimeline';
+import { AdSkipNotifier } from '../model/AdSkipNotifier';
 import { AdReportStorage } from '../data/AdReportStorage';
 import { window, PiPWindow, promptAction } from '@kit.ArkUI';
 import { AvPlayerController, PlaybackSpeedOption, VideoStreamInfo } from '../player/AvPlayerController';
@@ -91,6 +92,9 @@ export struct PlayerPage {
   private holderFile: fs.File | null = null;
   private cacheDir: string = '';
   private readonly adSession: AdDiagnosticSession = new AdDiagnosticSession();
+  private readonly adSkips: AdSkipNotifier = new AdSkipNotifier();
+  @State private adSkipNotice: string = '';
+  private adSkipTimer: number = -1;
   private adScope: string = '';
   private lastAdRefreshAt: number = 0;
   private latestAdReport: string = '';
@@ -538,6 +542,7 @@ export struct PlayerPage {
   }
 
   private bindCallbacks(): void {
+    this.player.onSeekDone = (positionMs: number) => { this.adSkips.anchor(positionMs); };
     this.player.onLoudnessState = (state: string, gainDb: number) => {
       if (this.released) return;
       this.loudnessState = state;
@@ -567,6 +572,8 @@ export struct PlayerPage {
       PlaybackContinuation.refresh();
     };
     this.player.onProgress = (positionMs: number, durationMs: number) => {
+      const skippedMs = this.adSkips.update(positionMs, this.playing, durationMs);
+      if (skippedMs > 0 && !this.released) this.showAdSkipNotice(skippedMs);
       // 持续记录当前位置：画中画进出或画面重建导致重新 create 时，
       // startPlay 会用它做续播点；不记的话会跳回进页面时的老位置。
       this.positionMs = positionMs;
@@ -981,6 +988,10 @@ export struct PlayerPage {
   }
 
   private async doStartPlay(): Promise<boolean> {
+    if (this.adSkipTimer >= 0) clearTimeout(this.adSkipTimer);
+    this.adSkipTimer = -1;
+    this.adSkipNotice = '';
+    this.adSkips.configure(AdDiagnostics.empty());
     const adToken = this.adSession.begin(this.settings.adFilter, this.offlineDir !== '' ? 'offline' : 'pending', this.episodeUrl);
     this.adScope = this.adScopeKey();
     this.refreshAdView(true);
@@ -1053,6 +1064,7 @@ export struct PlayerPage {
     }
     this.refreshAdView(true);
     this.loadingHint = '';
+    this.adSkips.configure(resolved.trace);
     if (this.adResumeSourceMs >= 0) {
       this.applySeekUi(AdFilterTimeline.fromSource(resolved.trace, this.adResumeSourceMs));
       this.adResumeSourceMs = -1;
@@ -1193,6 +1205,10 @@ export struct PlayerPage {
       return;
     }
     this.released = true;
+    if (this.adSkipTimer >= 0) clearTimeout(this.adSkipTimer);
+    this.adSkipTimer = -1;
+    this.adSkipNotice = '';
+    this.adSkips.configure(AdDiagnostics.empty());
     this.adSession.close();
     this.showAdDiagnostics = false;
     this.tvGesture.reset();
@@ -1329,6 +1345,7 @@ export struct PlayerPage {
 
   /** seek 之后同步 UI 与卡顿判定基准 */
   private applySeekUi(ms: number): void {
+    this.adSkips.anchor(ms);
     this.positionMs = ms;
     this.positionText = Utils.formatTime(ms);
     this.sliderValue = Math.floor(ms / 1000);
@@ -2055,6 +2072,18 @@ export struct PlayerPage {
     if (!force && (!this.showAdDiagnostics || Date.now() - this.lastAdRefreshAt < 1000)) return;
     this.lastAdRefreshAt = Date.now();
     this.adView = AdDiagnostics.view(this.adSession.current(), this.positionMs, this.durationMs);
+  }
+
+  private showAdSkipNotice(durationMs: number): void {
+    if (this.adSkipTimer >= 0) clearTimeout(this.adSkipTimer);
+    const text = '广告过滤 · 跳过 ' + (durationMs / 1000).toFixed(1) + ' 秒';
+    this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => { this.adSkipNotice = text; });
+    this.adSkipTimer = setTimeout(() => {
+      this.adSkipTimer = -1;
+      if (!this.released) {
+        this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, () => { this.adSkipNotice = ''; });
+      }
+    }, 3000);
   }
 
   private openAdDiagnostics(): void {
@@ -2864,6 +2893,16 @@ export struct PlayerPage {
           }
         }
 
+        if (this.adSkipNotice !== '') {
+          Column() {
+            Text(this.adSkipNotice).fontSize(17).fontColor('#EDF4FF')
+              .padding({ left: 22, right: 22, top: 12, bottom: 12 })
+              .backgroundColor('#D91C2635').backgroundEffect({ radius: 16 }).borderRadius(24)
+              .shadow({ radius: 14, color: '#66000000', offsetY: 4 })
+              .transition(TransitionEffect.OPACITY).hitTestBehavior(HitTestMode.None)
+          }.width('100%').height('100%').padding({ top: 88 })
+            .alignItems(HorizontalAlign.Center).hitTestBehavior(HitTestMode.None)
+        }
         if (this.showAdDiagnostics) this.adDiagnosticPanel()
 
         // 滑屏调节的浮层提示（音量改由系统音量面板呈现，这里只留亮度）
