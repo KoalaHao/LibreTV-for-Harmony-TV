@@ -94,6 +94,30 @@ export class Utils {
     return proto + host + '/' + stack.join('/');
   }
 
+  /** Extract a quoted media address; never join unrelated script markup around a media suffix. */
+  static mediaUrlFromPage(text: string, base: string): string {
+    const resolve = (raw: string): string => {
+      const value = raw.replace(/\\\//g, '/').replace(/\\u0026/gi, '&').replace(/&amp;/gi, '&').trim();
+      if (value === '' || /[\s<>"'\\]/.test(value) || /^[a-z][a-z0-9+.-]*:/i.test(value) && !/^https?:\/\//i.test(value)) return '';
+      const url = value.startsWith('//') ? base.substring(0, base.indexOf(':') + 1) + value : Utils.resolveUrl(base, value);
+      return /^https?:\/\//i.test(url) && /\.(m3u8|mp4|flv|mkv|m4v)(?:[?#]|$)/i.test(url) ? url : '';
+    };
+    const patterns: RegExp[] = [
+      /(?:const|let|var)\s+(?:url|main|sourceUrl|videoUrl|hlsUrl)\s*=\s*["']([^"']+)["']/gi,
+      /["']?(?:url|sourceUrl|videoUrl|hlsUrl)["']?\s*[:=]\s*["']([^"']+)["']/gi,
+      /["']([^"'<>\s]+\.(?:m3u8|mp4|flv|mkv|m4v)(?:[?#][^"'<>\s]*)?)["']/gi
+    ];
+    for (const pattern of patterns) {
+      for (let count = 0; count < 32; count++) {
+        const match = pattern.exec(text);
+        if (match === null) break;
+        const url = resolve(match[1] || '');
+        if (url !== '') return url;
+      }
+    }
+    return '';
+  }
+
   static hostnameOf(url: string): string {
     try {
       const protoEnd = url.indexOf('://');

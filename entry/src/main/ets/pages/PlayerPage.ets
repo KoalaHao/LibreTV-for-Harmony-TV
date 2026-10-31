@@ -2200,6 +2200,180 @@ export struct PlayerPage {
     return codec;
   }
 
+  @Builder
+  private playbackActionItems() {
+    Text(this.loudnessLabel())
+      .fontSize(12).fontColor(this.loudnessGainDb > 0 && this.loudnessState === 'applied' ? '#BFDFFF' : '#FFFFFF')
+      .backgroundColor(this.loudnessGainDb > 0 ? '#384875A3' : '#26FFFFFF')
+      .borderRadius(14).height(30).padding({ left: 11, right: 11 })
+      .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+      .enabled(!this.loudnessBusy && this.hasStarted && this.errorText === '' && this.sourceKey !== '' && this.vodId !== '')
+      .accessibilityText('当前片源影片的' + this.loudnessLabel() + '，点击依次选择关闭、加十二分贝、加二十四分贝')
+      .onClick(() => { this.cycleLoudness(); })
+    if (DevicePolicy.isTV()) {
+      Text(this.qualityBusy ? '鸿鹄画质 · 切换中' : ('鸿鹄画质 · ' + (this.qualityEnabled ? '开' : '关')))
+        .fontSize(13).fontColor(this.qualityEnabled ? '#A8EBC3' : '#FFFFFF')
+        .backgroundColor(this.qualityEnabled ? '#38439165' : '#26FFFFFF')
+        .borderRadius(15).height(30).padding({ left: 13, right: 13 })
+        .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+        .enabled(!this.qualityBusy && this.hasStarted && this.errorText === '')
+        .accessibilityText('鸿鹄画质，系统视频超分，' + (this.qualityEnabled ? '开启' : '关闭'))
+        .onClick(() => { this.toggleTvQuality(); })
+    }
+    // 原来是无内边距的 12sp 纯文字，手指很难点中；
+    // 改成 34vp 高的胶囊按钮，点选区域和视觉层次都更清楚。
+    Text(this.speedLabel())
+      .fontSize(12)
+      .fontColor('#FFFFFF')
+      .backgroundColor('#26FFFFFF')
+      .borderRadius(14)
+      .height(28)
+      .padding({ left: 11, right: 11 })
+      .textAlign(TextAlign.Center)
+      .maxLines(1)
+      .focusable(true)
+      .focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+      .onClick(() => {
+        this.showSpeeds = !this.showSpeeds;
+      })
+    if (this.episodes.length > 1) {
+      Text('选集')
+        .fontSize(12)
+        .fontColor('#FFFFFF')
+        .backgroundColor('#26FFFFFF')
+        .borderRadius(14)
+        .height(28)
+        .padding({ left: 11, right: 11 })
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .focusable(true)
+        .focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+        .onClick(() => {
+          this.showAdDiagnostics = false;
+          this.showEpisodes = !this.showEpisodes;
+        })
+    }
+    if (this.currentEp + 1 < this.episodes.length) {
+      Text('下一集')
+        .fontSize(12)
+        .fontColor('#FFFFFF')
+        .backgroundColor('#26FFFFFF')
+        .borderRadius(14)
+        .height(28)
+        .padding({ left: 11, right: 11 })
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .focusable(true)
+        .focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+        .onClick(() => {
+          this.selectEpisode(this.currentEp + 1);
+        })
+    }
+    if (!DevicePolicy.isTV()) {
+      // 手机保留系统投屏入口。
+      Row() {
+        AVCastPicker({
+          normalColor: '#FFFFFF',
+          activeColor: Color.White,
+          pickerStyle: AVCastPickerStyle.STYLE_MENU,
+          colorMode: AVCastPickerColorMode.AUTO,
+          sessionType: 'video'
+        })
+          .width(24)
+          .height(24)
+      }
+      .height(28)
+      .padding({ left: 5, right: 5 })
+      .backgroundColor('#26FFFFFF')
+      .borderRadius(14)
+      .justifyContent(FlexAlign.Center)
+    }
+
+    // 横屏/大屏下补一个「铺满屏/适应屏」切换：车机等大屏可去掉黑边最大化画面
+    if (!DevicePolicy.isTV() && this.canvasW > this.canvasH && this.offlineDir === '') {
+      Text(this.fitCover ? '适应屏' : '铺满屏')
+        .fontSize(12)
+        .fontColor('#FFFFFF')
+        .backgroundColor('#26FFFFFF')
+        .borderRadius(14)
+        .height(28)
+        .padding({ left: 11, right: 11 })
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .focusable(true)
+        .focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+        .onClick(() => {
+          this.fitCover = !this.fitCover;
+          this.updateSurfaceSize();
+        })
+    }
+    if (this.offlineDir === '') {
+      Text('换源')
+        .fontSize(12)
+        .fontColor('#FFFFFF')
+        .backgroundColor('#26FFFFFF')
+        .borderRadius(14)
+        .height(28)
+        .padding({ left: 11, right: 11 })
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .focusable(true)
+        .focusBox(TV_FOCUS).margin({ left: DevicePolicy.isTV() ? 6 : 0, top: DevicePolicy.isTV() ? 2 : 0, bottom: DevicePolicy.isTV() ? 2 : 0 })
+        .onClick(() => {
+          this.runSpeedTest();
+        })
+    }
+  }
+
+  @Builder
+  private tvPlaybackControls() {
+    Column({ space: 0 }) {
+      Row({ space: 18 }) {
+        Column({ space: 3 }) {
+          Text(this.titleLabel()).fontSize(15).fontWeight(FontWeight.Medium).fontColor(Color.White)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.offlineDir !== '' ? '离线缓存 · ' + this.episodeName : this.episodeName + ' · ' + this.infoSourceName())
+            .fontSize(11).fontColor('#CCCCCC').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(this.timeLabel()).fontSize(11).fontColor('#C7CDD7').maxLines(1)
+        }.width('23%').alignItems(HorizontalAlign.Start)
+        Column({ space: 7 }) {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.End, alignItems: ItemAlign.Center }) {
+            this.playbackActionItems()
+            Text('广告诊断').fontSize(12).fontColor('#E2EBF8')
+              .padding({ left: 11, right: 11 }).height(30).textAlign(TextAlign.Center)
+              .backgroundColor('#5037475D').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
+              .margin({ left: 6 })
+              .onClick(() => { this.openAdDiagnostics(); })
+            Image($r('app.media.ic_player_back')).width(30).height(30).padding(6).fillColor(Color.White)
+              .backgroundColor('#26FFFFFF').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
+              .accessibilityText('返回上一级').margin({ left: 6 })
+              .onClick(() => { this.back(); })
+          }.width('100%')
+          Row({ space: 10 }) {
+            Text(this.sourceVideoLabel()).fontSize(12).fontColor('#E0E5EF').maxLines(1)
+            if (this.sourceCodecLabel() !== '') {
+              Text(this.sourceCodecLabel()).fontSize(11).fontColor('#BBC3D0').maxLines(1)
+            }
+            Text(this.superResolutionLabel()).fontSize(11)
+              .fontColor(this.superResolutionState === 'active' ? '#90E8B3' : '#BBC3D0').maxLines(1)
+          }.width('100%').justifyContent(FlexAlign.End)
+        }.layoutWeight(1).alignItems(HorizontalAlign.End)
+      }.width('100%').alignItems(VerticalAlign.Top)
+        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .backgroundColor('#66000000').backgroundEffect({ radius: 20, saturation: 1.4 })
+        .borderRadius({ bottomLeft: 20, bottomRight: 20 }).hitTestBehavior(HitTestMode.Block)
+      Blank().layoutWeight(1).hitTestBehavior(HitTestMode.None)
+      Column() {
+        Slider({ value: this.sliderValue, min: 0, max: this.sliderMaxValue(), style: SliderStyle.OutSet })
+          .width('100%').height(24).blockSize({ width: 14, height: 14 }).trackThickness(3)
+          .blockColor($r('app.color.color_primary')).selectedColor($r('app.color.color_primary')).trackColor('#555B66')
+          .accessibilityText('播放进度')
+          .onChange((value: number, mode: SliderChangeMode) => { this.onSliderChange(value, mode); })
+      }.width('100%').padding({ left: 16, right: 16, top: 2, bottom: 8 })
+        .backgroundColor('#33000000').hitTestBehavior(HitTestMode.Block)
+    }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
+  }
+
   private handleBack(): void {
     if (this.showEpisodes || this.showSpeeds || this.showSources || this.showAdDiagnostics) {
       this.showEpisodes = false;
@@ -2239,7 +2413,7 @@ export struct PlayerPage {
           .width('100%')
           .height('100%')
           .onTouch((event: TouchEvent) => {
-            this.handlePressTouch(event);
+            if (!DevicePolicy.isTV()) this.handlePressTouch(event);
           })
           .focusable(true)
           .focusBox(TV_FOCUS)
@@ -2247,6 +2421,15 @@ export struct PlayerPage {
             // 长按后抬手不该顺带把控制条呼出来
             if (this.suppressTap) {
               this.suppressTap = false;
+              return;
+            }
+            if (DevicePolicy.isTV()) {
+              if (this.hasStarted && !this.showEpisodes && !this.showSpeeds && !this.showSources && !this.showAdDiagnostics) {
+                this.togglePlay();
+              } else {
+                this.controlsVisible = true;
+                this.scheduleHideControls();
+              }
               return;
             }
             if (!this.controlsVisible) {
@@ -2342,6 +2525,9 @@ export struct PlayerPage {
 
         // 控制层
         if (this.controlsVisible && this.errorText === '') {
+          if (DevicePolicy.isTV()) {
+            this.tvPlaybackControls()
+          } else {
           Column({ space: 0 }) {
             // 顶部栏
             Row({ space: 10 }) {
@@ -2542,127 +2728,7 @@ export struct PlayerPage {
                   .maxLines(1)
                   .layoutWeight(1)
                 Row({ space: 6 }) {
-                  Text(this.loudnessLabel())
-                    .fontSize(12).fontColor(this.loudnessGainDb > 0 && this.loudnessState === 'applied' ? '#BFDFFF' : '#FFFFFF')
-                    .backgroundColor(this.loudnessGainDb > 0 ? '#384875A3' : '#26FFFFFF')
-                    .borderRadius(14).height(30).padding({ left: 11, right: 11 })
-                    .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS)
-                    .enabled(!this.loudnessBusy && this.hasStarted && this.errorText === '' && this.sourceKey !== '' && this.vodId !== '')
-                    .accessibilityText('当前片源影片的' + this.loudnessLabel() + '，点击依次选择关闭、加十二分贝、加二十四分贝')
-                    .onClick(() => { this.cycleLoudness(); })
-                  if (DevicePolicy.isTV()) {
-                    Text(this.qualityBusy ? '鸿鹄画质 · 切换中' : ('鸿鹄画质 · ' + (this.qualityEnabled ? '开' : '关')))
-                      .fontSize(13).fontColor(this.qualityEnabled ? '#A8EBC3' : '#FFFFFF')
-                      .backgroundColor(this.qualityEnabled ? '#38439165' : '#26FFFFFF')
-                      .borderRadius(15).height(30).padding({ left: 13, right: 13 })
-                      .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS)
-                      .enabled(!this.qualityBusy && this.hasStarted && this.errorText === '')
-                      .accessibilityText('鸿鹄画质，系统视频超分，' + (this.qualityEnabled ? '开启' : '关闭'))
-                      .onClick(() => { this.toggleTvQuality(); })
-                  }
-                  // 原来是无内边距的 12sp 纯文字，手指很难点中；
-                  // 改成 34vp 高的胶囊按钮，点选区域和视觉层次都更清楚。
-                  Text(this.speedLabel())
-                    .fontSize(12)
-                    .fontColor('#FFFFFF')
-                    .backgroundColor('#26FFFFFF')
-                    .borderRadius(14)
-                    .height(28)
-                    .padding({ left: 11, right: 11 })
-                    .textAlign(TextAlign.Center)
-                    .maxLines(1)
-                    .focusable(true)
-                    .focusBox(TV_FOCUS)
-                    .onClick(() => {
-                      this.showSpeeds = !this.showSpeeds;
-                    })
-                  if (this.episodes.length > 1) {
-                    Text('选集')
-                      .fontSize(12)
-                      .fontColor('#FFFFFF')
-                      .backgroundColor('#26FFFFFF')
-                      .borderRadius(14)
-                      .height(28)
-                      .padding({ left: 11, right: 11 })
-                      .textAlign(TextAlign.Center)
-                      .maxLines(1)
-                      .focusable(true)
-                      .focusBox(TV_FOCUS)
-                      .onClick(() => {
-                        this.showAdDiagnostics = false;
-                        this.showEpisodes = !this.showEpisodes;
-                      })
-                  }
-                  if (this.currentEp + 1 < this.episodes.length) {
-                    Text('下一集')
-                      .fontSize(12)
-                      .fontColor('#FFFFFF')
-                      .backgroundColor('#26FFFFFF')
-                      .borderRadius(14)
-                      .height(28)
-                      .padding({ left: 11, right: 11 })
-                      .textAlign(TextAlign.Center)
-                      .maxLines(1)
-                      .focusable(true)
-                      .focusBox(TV_FOCUS)
-                      .onClick(() => {
-                        this.selectEpisode(this.currentEp + 1);
-                      })
-                  }
-                  if (!DevicePolicy.isTV()) {
-                    // 手机保留系统投屏入口。
-                    Row() {
-                      AVCastPicker({
-                        normalColor: '#FFFFFF',
-                        activeColor: Color.White,
-                        pickerStyle: AVCastPickerStyle.STYLE_MENU,
-                        colorMode: AVCastPickerColorMode.AUTO,
-                        sessionType: 'video'
-                      })
-                        .width(24)
-                        .height(24)
-                    }
-                    .height(28)
-                    .padding({ left: 5, right: 5 })
-                    .backgroundColor('#26FFFFFF')
-                    .borderRadius(14)
-                    .justifyContent(FlexAlign.Center)
-                  }
-
-                  // 横屏/大屏下补一个「铺满屏/适应屏」切换：车机等大屏可去掉黑边最大化画面
-                  if (this.canvasW > this.canvasH && this.offlineDir === '') {
-                    Text(this.fitCover ? '适应屏' : '铺满屏')
-                      .fontSize(12)
-                      .fontColor('#FFFFFF')
-                      .backgroundColor('#26FFFFFF')
-                      .borderRadius(14)
-                      .height(28)
-                      .padding({ left: 11, right: 11 })
-                      .textAlign(TextAlign.Center)
-                      .maxLines(1)
-                      .focusable(true)
-                      .focusBox(TV_FOCUS)
-                      .onClick(() => {
-                        this.fitCover = !this.fitCover;
-                        this.updateSurfaceSize();
-                      })
-                  }
-                  if (this.offlineDir === '') {
-                    Text('换源')
-                      .fontSize(12)
-                      .fontColor('#FFFFFF')
-                      .backgroundColor('#26FFFFFF')
-                      .borderRadius(14)
-                      .height(28)
-                      .padding({ left: 11, right: 11 })
-                      .textAlign(TextAlign.Center)
-                      .maxLines(1)
-                      .focusable(true)
-                      .focusBox(TV_FOCUS)
-                      .onClick(() => {
-                        this.runSpeedTest();
-                      })
-                  }
+                  this.playbackActionItems()
                 }
                 .justifyContent(FlexAlign.End)
               }
@@ -2690,6 +2756,7 @@ export struct PlayerPage {
           // 早先 top 26 / bottom 22 是为了避开状态栏和手势条，代价是顶部影片信息
           // 栏和底部控制条都"浮在离边一段距离的地方"，看着不像是全屏。
           .padding({ top: 0, bottom: 0 })
+          }
         }
 
         if (this.showAdDiagnostics) this.adDiagnosticPanel()

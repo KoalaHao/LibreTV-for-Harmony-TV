@@ -95,41 +95,8 @@ export class PlayUrlResolver {
     if (!res.ok || res.text === '') {
       return url;
     }
-    const text: string = res.text;
-    const patterns: RegExp[] = [
-      /const\s+url\s*=\s*["']([^"']+)["']/,
-      /var\s+url\s*=\s*["']([^"']+)["']/,
-      /sourceUrl\s*[:=]\s*["']([^"']+)["']/,
-      /videoUrl\s*[:=]\s*["']([^"']+)["']/,
-      /"url"\s*:\s*"([^"]+)"/,
-      /url\s*:\s*["']([^"']+)["']/
-    ];
-    for (const p of patterns) {
-      const m = text.match(p);
-      if (m !== null && m.length > 1) {
-        const candidate: string = m[1] !== undefined ? m[1] : '';
-        if (candidate.indexOf('.m3u8') >= 0) {
-          return Utils.resolveUrl(url, candidate);
-        }
-      }
-    }
-    // 兜底：页面里出现的第一条 .m3u8 链接（手写扫描，避免复杂正则）
-    const idx: number = text.indexOf('.m3u8');
-    if (idx >= 0) {
-      const start: number = text.lastIndexOf('http', idx);
-      if (start >= 0) {
-        let end: number = idx + 5;
-        while (end < text.length) {
-          const ch: string = text.charAt(end);
-          if (ch === '"' || ch === "'" || ch === ' ' || ch === ')' || ch === '<' || ch === '\n' || ch === '\t') {
-            break;
-          }
-          end++;
-        }
-        return text.substring(start, end);
-      }
-    }
-    return url;
+    const mediaUrl = Utils.mediaUrlFromPage(res.text, url);
+    return mediaUrl !== '' ? mediaUrl : url;
   }
 
   static isM3u8(url: string): boolean {

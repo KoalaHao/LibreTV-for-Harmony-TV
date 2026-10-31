@@ -6,7 +6,7 @@ const ad=await loadEts('model/AdDiagnostics.ets',[[/^import .*;$/gm,''],[/^/,'co
 globalThis.__adModels=ad;
 let response={ok:true,text:'',error:''},failWrite=false;
 globalThis.__adPlatform={
- HttpClient:{getTextResilient:async()=>response},
+ HttpClient:{getTextResilient:async(url)=>typeof response==='function'?response(url):response},
  fs:{accessSync(){return false;},mkdirSync(){},openSync(){return {fd:1};},writeSync(){if(failWrite)throw Error('disk full');},closeSync(){},OpenMode:{READ_WRITE:1,CREATE:2,TRUNC:4}},
  util:{TextEncoder:{create:()=>({encodeInto:text=>new TextEncoder().encode(text)})}}
 };
@@ -19,6 +19,35 @@ const original=[{dur:6,uri:'https://main.test/1.ts?token=SECRET'},
  {dur:2,uri:'https://ad.test/ads/a.ts',disc:true},{dur:2,uri:'https://ad.test/ads/b.ts'},
  {dur:6,uri:'https://main.test/4.ts',disc:true},{dur:6,uri:'https://main.test/5.ts'}];
 const rewrite=(segments=original,mode='loose')=>R.rewriteMediaPlaylist(playlist(segments),base,mode);
+test('all filtering modes retain source timestamp boundaries even without resolution matches',()=>{
+ const input=playlist([{dur:6,uri:'a.ts'},{dur:6,uri:'b.ts',disc:true},{dur:6,uri:'c.ts',disc:true}]);
+ for(const mode of ['off','loose','strict']){
+  const out=R.rewriteMediaPlaylist(input,base,mode);
+  assert.equal(out.filteredCount,0);assert.equal(out.content.split('\n').filter(line=>line==='#EXT-X-DISCONTINUITY').length,2);
+  assert.ok(out.content.indexOf('#EXT-X-DISCONTINUITY')<out.content.indexOf('/f/b.ts'));
+ }
+});
+test('cutting an untagged middle segment inserts one clock boundary at the resumed film',()=>{
+ const out=rewrite([{dur:6,uri:'a.ts'},{dur:.5,uri:'ad.ts'},{dur:6,uri:'b.ts'}]);
+ assert.equal(out.filteredCount,1);assert.equal(out.segmentCount,2);
+ assert.equal(out.content.split('\n').filter(line=>line==='#EXT-X-DISCONTINUITY').length,1);
+ assert.match(out.content,/a\.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:6,\nhttps:\/\/main\.test\/f\/b\.ts/);
+});
+test('a boundary on removed media carries to the next kept segment and an existing return marker is not duplicated',()=>{
+ for(const disc of [false,true]){
+  const out=rewrite([{dur:6,uri:'a.ts'},{dur:2,uri:'https://ad.test/ads/a.ts',disc:true},
+   {dur:2,uri:'https://ad.test/ads/b.ts'},{dur:6,uri:'b.ts',disc}], 'strict');
+  assert.equal(out.filteredCount,2);assert.equal(out.content.split('\n').filter(line=>line==='#EXT-X-DISCONTINUITY').length,1);
+  assert.ok(out.content.indexOf('#EXT-X-DISCONTINUITY')<out.content.indexOf('/f/b.ts'));
+ }
+});
+test('dropping only leading or trailing tiny segments does not add a middle boundary or remove sequence metadata',()=>{
+ const input=playlist([{dur:.5,uri:'lead.ts'},{dur:6,uri:'a.ts'},{dur:6,uri:'b.ts'},{dur:.5,uri:'tail.ts'}])
+  .replace('#EXTM3U','#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:7');
+ const out=R.rewriteMediaPlaylist(input,base,'loose');assert.equal(out.filteredCount,2);
+ assert.equal(out.content.split('\n').filter(line=>line==='#EXT-X-DISCONTINUITY').length,0);
+ assert.match(out.content,/#EXT-X-DISCONTINUITY-SEQUENCE:7/);
+});
 test('removal decisions preserve the original sequence and map playback time on the filtered timeline',()=>{
  const result=rewrite();assert.equal(result.filteredCount,2);assert.equal(result.segmentCount,5);
  assert.equal(result.trace.originalCount,7);assert.equal(result.trace.filteredMs,4000);
@@ -57,6 +86,17 @@ test('network or local-file failure says direct fallback and cannot map the plan
  out=await R.rewrite(base,{},'loose','/tmp/test');failWrite=false;
  assert.equal(out.ok,false);assert.equal(out.trace.filteredCount,2);assert.equal(D.locate(out.trace,19000),-1);
  assert.match(D.view(out.trace,19000).summary,/没有应用/);
+});
+test('a manifest endpoint returning a static media page follows its address and never writes HTML as a playlist',async()=>{
+ const calls=[];response=async url=>{calls.push(url);return {ok:true,text:calls.length===1?
+  '<script src="https://cdn.test/hls.js"></script><script>var main="/real/index.m3u8?sign=secret";</script>':
+  playlist([{dur:6,uri:'seg.ts'}]),error:''};};
+ const out=await R.rewrite(base,{},'off','/tmp/test');
+ assert.equal(out.ok,true);assert.equal(out.segmentCount,1);assert.equal(calls.length,2);
+ assert.equal(calls[1],'https://main.test/real/index.m3u8?sign=secret');
+ response={ok:true,text:'<html>Unavailable</html>',error:''};
+ const failed=await R.rewrite(base,{},'off','/tmp/test');assert.equal(failed.ok,false);assert.match(failed.error,/不是 M3U8/);
+ response={ok:true,text:'',error:''};
 });
 test('mark captures the clip, progress, nearby decisions and a safe manifest snapshot without mutating playback',()=>{
  const trace=rewrite().trace,copy=JSON.stringify(trace);

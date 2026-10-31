@@ -78,6 +78,14 @@ export class M3u8Rewriter {
             res.status > 0 ? '清单请求 HTTP ' + res.status + '；已回退原地址播放。' : '清单请求失败；已回退原地址播放。');
         }
         text = res.text;
+        if (!text.trim().startsWith('#EXTM3U')) {
+          const mediaUrl = Utils.mediaUrlFromPage(text, currentUrl);
+          if (mediaUrl !== '' && mediaUrl !== currentUrl && /\.m3u8(?:[?#]|$)/i.test(mediaUrl)) {
+            currentUrl = mediaUrl;
+            continue;
+          }
+          return M3u8Rewriter.fail('片源返回的内容不是 M3U8 播放清单', trace);
+        }
         if (text.indexOf('#EXT-X-STREAM-INF') < 0) {
           break;
         }
@@ -89,6 +97,9 @@ export class M3u8Rewriter {
       }
       if (text === '') {
         return M3u8Rewriter.fail('播放列表为空', trace);
+      }
+      if (!text.trim().startsWith('#EXTM3U') || text.indexOf('#EXT-X-STREAM-INF') >= 0) {
+        return M3u8Rewriter.fail('播放清单跳转层级过多', trace);
       }
       // 2) 重写媒体播放列表
       stage = '分析播放分片';
@@ -365,6 +376,8 @@ export class M3u8Rewriter {
     let lastKey = '';
     let lastMap = '';
     let kept = 0;
+    let pendingDiscontinuity = false;
+    let skippedSinceKept = false;
     for (let i = 0; i < segs.length; i++) {
       const s = segs[i];
       // 更新加密状态（即使分片被丢弃，后续分片仍沿用其 KEY/MAP）
@@ -374,9 +387,15 @@ export class M3u8Rewriter {
         } else if (t.startsWith('#EXT-X-MAP')) {
           lastMap = t;
         }
+        if (t === '#EXT-X-DISCONTINUITY') pendingDiscontinuity = true;
       }
       if (dropFlags[i]) {
+        if (kept > 0) skippedSinceKept = true;
         continue;
+      }
+      // Removed media leaves a timestamp gap. Retain an explicit clock boundary even if its tag was dropped.
+      if ((pendingDiscontinuity || skippedSinceKept) && s.tags.indexOf('#EXT-X-DISCONTINUITY') < 0) {
+        out.push('#EXT-X-DISCONTINUITY');
       }
       let keyEmitted = false;
       let mapEmitted = false;
@@ -388,10 +407,8 @@ export class M3u8Rewriter {
           out.push(M3u8Rewriter.rewriteUriAttr(t, baseUrl));
           mapEmitted = true;
         } else if (t.startsWith('#EXT-X-DISCONTINUITY')) {
-          // Resolution-based splicing must retain the decoder/timestamp boundary on return to the film.
-          if (i === 0 || (mode === 'strict' && resolution.matches.length > 0)) {
-            out.push(t);
-          }
+          // Source discontinuities are required for clock changes in every mode, including filtering Off.
+          out.push(t);
         } else {
           out.push(t);
         }
@@ -404,6 +421,8 @@ export class M3u8Rewriter {
       }
       out.push(Utils.resolveUrl(baseUrl, s.uri));
       kept++;
+      pendingDiscontinuity = false;
+      skippedSinceKept = false;
     }
     if (hadEndList) {
       out.push('#EXT-X-ENDLIST');
