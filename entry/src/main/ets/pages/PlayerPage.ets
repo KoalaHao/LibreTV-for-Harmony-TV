@@ -12,6 +12,7 @@ import { BackNavigation } from '../common/BackNavigation';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { AdDiagnostics, AdDiagnosticSession, AdDiagnosticView, AdReportContext } from '../model/AdDiagnostics';
+import { AdFilterTimeline } from '../model/AdFilterTimeline';
 import { AdReportStorage } from '../data/AdReportStorage';
 import { window, PiPWindow, promptAction } from '@kit.ArkUI';
 import { AvPlayerController, PlaybackSpeedOption, VideoStreamInfo } from '../player/AvPlayerController';
@@ -94,6 +95,10 @@ export struct PlayerPage {
   private lastAdRefreshAt: number = 0;
   private latestAdReport: string = '';
   @State private showAdDiagnostics: boolean = false;
+  @State private showAdDetails: boolean = false;
+  @State private adFilterSelection: string = SettingsStore.shared().get().adFilter;
+  @State private adFilterBusy: boolean = false;
+  private adResumeSourceMs: number = -1;
   @State private adView: AdDiagnosticView = AdDiagnostics.view(AdDiagnostics.empty(), 0);
   @State private adLastMark: string = '尚未标记广告';
   @State private adMarkBusy: boolean = false;
@@ -127,6 +132,8 @@ export struct PlayerPage {
   @State positionText: string = '00:00';
   @State durationText: string = '00:00';
   @State sliderValue: number = 0;
+  private sliderEditing: boolean = false;
+  private sliderHovered: boolean = false;
   @State sliderMax: number = 100;
   @State controlsVisible: boolean = true;
   /** 点播收藏态：顶部栏星标按钮的实/空心 */
@@ -432,6 +439,11 @@ export struct PlayerPage {
   private resetForReentry(): void {
     this.adSession.close();
     this.showAdDiagnostics = false;
+    this.showAdDetails = false;
+    this.adFilterBusy = false;
+    this.adResumeSourceMs = -1;
+    this.sliderEditing = false;
+    this.sliderHovered = false;
     this.released = false;
     this.starting = false;
     this.playPending = false;
@@ -571,8 +583,8 @@ export struct PlayerPage {
           this.clearStall();
         }
       }
-      this.positionText = Utils.formatTime(positionMs);
-      if (durationMs > 0) {
+      if (!this.sliderEditing) this.positionText = Utils.formatTime(positionMs);
+      if (durationMs > 0 && !this.sliderEditing) {
         this.sliderValue = Math.floor(positionMs / 1000);
       }
       this.maybeSaveProgress(positionMs, durationMs);
@@ -1041,6 +1053,10 @@ export struct PlayerPage {
     }
     this.refreshAdView(true);
     this.loadingHint = '';
+    if (this.adResumeSourceMs >= 0) {
+      this.applySeekUi(AdFilterTimeline.fromSource(resolved.trace, this.adResumeSourceMs));
+      this.adResumeSourceMs = -1;
+    }
     if (this.settings.adFilter === 'strict') this.startWatchdog();
     this.holderFile = resolved.file;
     // 让用户看得见广告过滤在工作；为 0 时不打扰（该源本来就没插广告）
@@ -1222,7 +1238,8 @@ export struct PlayerPage {
       clearTimeout(this.hideTimer);
     }
     this.hideTimer = setTimeout(() => {
-      if (this.playing && !this.showEpisodes && !this.showSpeeds && !this.showSources && !this.showAdDiagnostics) {
+      if (this.playing && !this.sliderEditing && !this.sliderHovered &&
+        !this.showEpisodes && !this.showSpeeds && !this.showSources && !this.showAdDiagnostics) {
         this.controlsVisible = false;
       }
     }, 4000);
@@ -1293,10 +1310,20 @@ export struct PlayerPage {
   }
 
   private onSliderChange(value: number, mode: SliderChangeMode): void {
+    this.controlsVisible = true;
+    if (this.hideTimer >= 0) { clearTimeout(this.hideTimer); this.hideTimer = -1; }
+    if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
+      this.sliderEditing = true;
+      this.sliderValue = value;
+      this.positionText = Utils.formatTime(value * 1000);
+      return;
+    }
     if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+      this.sliderEditing = false;
       const target: number = value * 1000;
       this.player.seekTo(target);
       this.applySeekUi(target);
+      this.scheduleHideControls();
     }
   }
 
@@ -2034,6 +2061,8 @@ export struct PlayerPage {
     this.tvGesture.cancel(); this.clearAdjustTimer(); this.adjustKind = '';
     this.showEpisodes = false; this.showSpeeds = false; this.showSources = false;
     this.controlsVisible = true; this.showAdDiagnostics = true;
+    this.showAdDetails = false;
+    this.adFilterSelection = this.settings.adFilter;
     this.latestAdReport = AdReportStorage.latest();
     this.adLastMark = '尚未标记广告';
     if (this.latestAdReport !== '') {
@@ -2045,6 +2074,31 @@ export struct PlayerPage {
       } catch (e) { this.latestAdReport = ''; }
     }
     this.refreshAdView(true);
+  }
+
+  private async applyAdFilter(): Promise<void> {
+    const mode = this.adFilterSelection;
+    if (this.adFilterBusy || this.starting || this.playPending || this.released ||
+      ['off', 'loose', 'strict'].indexOf(mode) < 0 || mode === this.settings.adFilter) return;
+    this.adFilterBusy = true;
+    const scope = this.adScopeKey();
+    const oldFile = this.holderFile;
+    const playing = this.playing;
+    this.adResumeSourceMs = AdFilterTimeline.toSource(this.adSession.current(), this.player.currentTime(), this.durationMs);
+    SettingsStore.shared().update({ adFilter: mode });
+    this.settings = SettingsStore.shared().get();
+    this.player.pause();
+    this.player.configureAutoPlay(playing, true);
+    try {
+      const ok = await this.startPlay();
+      if (ok && oldFile !== null && oldFile !== this.holderFile) {
+        try { fs.closeSync(oldFile.fd); } catch (e) { /* Previous playlist already closed. */ }
+      }
+      if (!this.released && scope === this.adScopeKey()) this.refreshAdView(true);
+    } finally {
+      this.adFilterBusy = false;
+      this.adResumeSourceMs = -1;
+    }
   }
 
   private markAd(): void {
@@ -2096,13 +2150,38 @@ export struct PlayerPage {
     Stack({ alignContent: Alignment.TopEnd }) {
       Column({ space: 12 }) {
         Row() {
-          Text('广告诊断').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#FFFFFF').layoutWeight(1)
+          Text('广告过滤').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#FFFFFF').layoutWeight(1)
           Text('关闭').fontSize(14).fontColor('#BBD9FF').padding(10).focusable(true).focusBox(TV_FOCUS)
             .onClick(() => { this.showAdDiagnostics = false; this.scheduleHideControls(); })
         }.width('100%')
         Scroll() {
           Column({ space: 14 }) {
+            Row({ space: 8 }) {
+              ForEach(['off', 'loose', 'strict'], (mode: string) => {
+                Text(AdDiagnostics.modeLabel(mode)).fontSize(16).fontColor('#FFFFFF')
+                  .layoutWeight(1).height(46).textAlign(TextAlign.Center).borderRadius(14)
+                  .backgroundColor(this.adFilterSelection === mode ? '#466B98' : '#2B3748')
+                  .enabled(!this.adFilterBusy && this.offlineDir === '')
+                  .focusable(true).focusBox(TV_FOCUS)
+                  .onClick(() => { this.adFilterSelection = mode; })
+              }, (mode: string) => mode)
+            }.width('100%')
+            Text(this.offlineDir !== '' ? '离线视频不重新过滤' :
+              (this.adFilterSelection === 'strict' ? '额外检查短时异常分辨率片段，加载可能稍慢。' :
+                (this.adFilterSelection === 'off' ? '保留全部原始分片。' : '过滤明确广告特征，优先保持播放稳定。')))
+              .fontSize(13).fontColor('#B3C3D9').width('100%')
+            Button(this.adFilterBusy ? '正在应用…' : '应用到当前播放')
+              .fontSize(15).width('100%').height(44).fontColor('#FFFFFF').backgroundColor('#466B98')
+              .enabled(!this.adFilterBusy && !this.starting && !this.playPending && this.offlineDir === '' &&
+                this.adFilterSelection !== this.settings.adFilter)
+              .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.applyAdFilter(); })
+            Text('保存为默认设置，重新加载并从当前内容附近继续，保留暂停状态。')
+              .fontSize(12).fontColor('#9CAEC6').width('100%')
             this.adField('过滤实际状态', 'state')
+            Text(this.showAdDetails ? '收起详细诊断' : '详细诊断 ›').fontSize(14).fontColor('#BBD9FF')
+              .height(42).width('100%').focusable(true).focusBox(TV_FOCUS)
+              .onClick(() => { this.showAdDetails = !this.showAdDetails; })
+            if (this.showAdDetails) {
             this.adField('当前分片（估算）', 'current')
             this.adField('来源与文件', 'location')
             this.adField('相邻变化', 'changes')
@@ -2115,22 +2194,23 @@ export struct PlayerPage {
                   .padding(9).backgroundColor('#26374C').borderRadius(8)
               }, (row: string) => row)
             }
+            Text(this.adLastMark).fontSize(11).fontColor('#A9BDD8').width('100%').maxLines(2)
+            Row({ space: 10 }) {
+              Button(this.adMarkBusy ? '正在记录…' : '这里有广告')
+                .fontSize(14).fontColor('#FFFFFF').backgroundColor('#875A39').layoutWeight(1)
+                .enabled(this.hasStarted && this.errorText === '' && !this.adMarkBusy)
+                .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.markAd(); })
+              Button('复制最近记录').fontSize(14).fontColor('#DCEAFF').backgroundColor('#35465D').layoutWeight(1)
+                .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.copyAdReport(); })
+            }.width('100%')
+            }
           }.width('100%').padding({ right: 6, bottom: 12 }).alignItems(HorizontalAlign.Start)
         }.width('100%').layoutWeight(1).scrollBar(BarState.Off).align(Alignment.TopStart)
-        Text(this.adLastMark).fontSize(11).fontColor('#A9BDD8').width('100%').maxLines(2)
-        Row({ space: 10 }) {
-          Button(this.adMarkBusy ? '正在记录…' : '这里有广告')
-            .fontSize(14).fontColor('#FFFFFF').backgroundColor('#875A39').layoutWeight(1)
-            .enabled(this.hasStarted && this.errorText === '' && !this.adMarkBusy)
-            .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.markAd(); })
-          Button('复制最近记录').fontSize(14).fontColor('#DCEAFF').backgroundColor('#35465D').layoutWeight(1)
-            .focusable(true).focusBox(TV_FOCUS).onClick(() => { this.copyAdReport(); })
-        }.width('100%')
       }.width(TvLayout.isLandscape(this.canvasW, this.canvasH) ? Math.min(560, this.canvasW * 0.52) : '94%')
-        .height(this.canvasH > 0 ? Math.max(220, this.canvasH - 160) : '76%')
+        .height(this.showAdDetails ? (this.canvasH > 0 ? Math.max(220, this.canvasH - 160) : '76%') : 380)
         .padding(18).backgroundColor('#F018202D').borderRadius(20)
-        .hitTestBehavior(HitTestMode.Block).margin({ top: 64, right: 18 })
-    }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
+        .hitTestBehavior(HitTestMode.Default).margin({ top: 80, right: 18 })
+    }.width('100%').height('100%').hitTestBehavior(HitTestMode.None)
   }
 
   private loadLoudnessPreference(): void {
@@ -2340,7 +2420,7 @@ export struct PlayerPage {
         Column({ space: 7 }) {
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.End, alignItems: ItemAlign.Center }) {
             this.playbackActionItems()
-            Text('广告诊断').fontSize(12).fontColor('#E2EBF8')
+            Text('广告过滤').fontSize(12).fontColor('#E2EBF8')
               .padding({ left: 11, right: 11 }).height(30).textAlign(TextAlign.Center)
               .backgroundColor('#5037475D').borderRadius(15).focusable(true).focusBox(TV_FOCUS)
               .margin({ left: 6 })
@@ -2366,9 +2446,32 @@ export struct PlayerPage {
       Blank().layoutWeight(1).hitTestBehavior(HitTestMode.None)
       Column() {
         Slider({ value: this.sliderValue, min: 0, max: this.sliderMaxValue(), style: SliderStyle.OutSet })
-          .width('100%').height(24).blockSize({ width: 14, height: 14 }).trackThickness(3)
+          .width('100%').height(48).blockSize({ width: 22, height: 22 }).trackThickness(4)
           .blockColor($r('app.color.color_primary')).selectedColor($r('app.color.color_primary')).trackColor('#555B66')
           .accessibilityText('播放进度')
+          .focusable(true).focusBox(TV_FOCUS)
+          .onHover((hovered: boolean) => {
+            this.sliderHovered = hovered;
+            this.controlsVisible = true;
+            this.scheduleHideControls();
+          })
+          .onTouch((event: TouchEvent) => {
+            if (event.type === TouchType.Down) {
+              this.sliderEditing = true;
+              if (this.hideTimer >= 0) { clearTimeout(this.hideTimer); this.hideTimer = -1; }
+            } else if (event.type === TouchType.Cancel || event.type === TouchType.Up) {
+              this.sliderEditing = false;
+              this.scheduleHideControls();
+            }
+          })
+          .onKeyEvent((event: KeyEvent) => {
+            if (event.type === KeyType.Down &&
+              (event.keyCode === KeyCode.KEYCODE_DPAD_LEFT || event.keyCode === KeyCode.KEYCODE_DPAD_RIGHT)) {
+              event.stopPropagation();
+              this.seekFromRemote(this.positionMs + (event.keyCode === KeyCode.KEYCODE_DPAD_RIGHT ? 10000 : -10000));
+              this.scheduleHideControls();
+            }
+          })
           .onChange((value: number, mode: SliderChangeMode) => { this.onSliderChange(value, mode); })
       }.width('100%').padding({ left: 16, right: 16, top: 2, bottom: 8 })
         .backgroundColor('#33000000').hitTestBehavior(HitTestMode.Default)
@@ -2583,7 +2686,7 @@ export struct PlayerPage {
                 }
                 .alignItems(HorizontalAlign.End).margin({ right: 16 })
               }
-              Text('广告诊断').fontSize(12).fontColor('#E2EBF8')
+              Text('广告过滤').fontSize(12).fontColor('#E2EBF8')
                 .padding({ left: 12, right: 12 }).height(32).textAlign(TextAlign.Center)
                 .backgroundColor('#5037475D').borderRadius(16).focusable(true).focusBox(TV_FOCUS)
                 .onClick(() => { this.openAdDiagnostics(); })
@@ -3016,7 +3119,7 @@ export struct PlayerPage {
       // Phone/tablet: preserve the existing vertical volume / brightness gestures.
       // 挂在根容器上而不是点击层：控制条显示时它铺满全屏，
       // 挂在点击层会被它挡住（Slider / 按钮自己有手势，仍然优先响应）。
-      .gesture(
+      .parallelGesture(
         PanGesture({ fingers: 1, direction: DevicePolicy.isTV() ? PanDirection.All : PanDirection.Vertical })
           .onActionStart((event: GestureEvent) => {
             if (DevicePolicy.isTV()) {
