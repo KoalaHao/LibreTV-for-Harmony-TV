@@ -41,6 +41,7 @@ export interface SearchItem {
   actor?: string;
   director?: string;
   content?: string;
+  doubanId?: string;
   playFrom?: string;
   playUrl?: string;
 }
@@ -72,6 +73,7 @@ export interface DetailInfo {
   title: string;
   cover?: string;
   desc?: string;
+  doubanId?: string;
   typeName?: string;
   year?: string;
   area?: string;

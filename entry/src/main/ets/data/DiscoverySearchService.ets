@@ -68,6 +68,14 @@ export class DiscoverySearchService {
     return request;
   }
 
+  /** A completed explicit search is already a fresh aggregate; persist it without fetching it again. */
+  static remember(keyword: string, settings: Settings, results: MergedVideo[], updatedAt: number): void {
+    const context = DiscoverySearchService.context(settings);
+    const cache: DiscoverySearchCache = { keyword: keyword.trim(), context: context, updatedAt: updatedAt,
+      results: DiscoverySearchService.clean(results) };
+    SearchCacheStorage.write(DiscoverySearchService.key(keyword, context), JSON.stringify(cache));
+  }
+
   private static async fetch(keyword: string, context: string, settings: Settings,
     previous: DiscoverySearchCache | null): Promise<DiscoverySearchReply> {
     try {

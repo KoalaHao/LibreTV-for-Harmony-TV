@@ -89,3 +89,32 @@ test('successful empty results are cached, while invalid disk data is ignored',a
  const saved=storage.get(key);storage.set(key,'<html>not JSON</html>');assert.equal(Service.peek('空',settings),null);
  storage.set(key,saved.replace('"keyword":"空"','"keyword":"别的影片"'));assert.equal(Service.peek('空',settings),null);
 });
+test('fresh search results are immediately selectable on entry without repeating the aggregate request',()=>{
+ const session=new Session(),before=calls.length,seed={results:[group('搜索直达','seed')],updatedAt:Date.now()};
+ session.open('搜索直达',settings,seed);assert.equal(calls.length,before);assert.equal(session.state.fromSeed,true);
+ assert.equal(session.state.results[0].items[0].vodId,'seed');assert.equal(session.state.refreshing,false);session.close();
+});
+test('a newer search seed takes precedence over an older title cache and a manual refresh can replace it',async()=>{
+ const request=Service.refresh('较新搜索',settings);held.shift().resolve(reply('较新搜索','old'));await request;
+ clockOffset+=1000;
+ const session=new Session(),before=calls.length;
+ session.open('较新搜索',settings,{results:[group('较新搜索','fresh')],updatedAt:Date.now()});
+ assert.equal(calls.length,before);assert.equal(session.state.results[0].items[0].vodId,'fresh');
+ const refreshing=session.refresh();assert.equal(session.state.results[0].items[0].vodId,'fresh');
+ held.shift().resolve(reply('较新搜索','refreshed'));await refreshing;
+ assert.equal(session.state.results[0].items[0].vodId,'refreshed');assert.equal(session.state.fromSeed,false);session.close();
+});
+test('an expired search seed refreshes in the background and remains visible if the request fails',async()=>{
+ const session=new Session();session.open('旧的搜索入口',settings,{results:[group('旧的搜索入口','seed')],updatedAt:Date.now()-25*3600000});
+ assert.equal(session.state.refreshing,true);assert.equal(session.state.results[0].items[0].vodId,'seed');
+ held.shift().resolve({merged:[],failedCount:2});await tick();
+ assert.equal(session.state.results[0].items[0].vodId,'seed');assert.notEqual(session.state.error,'');session.close();
+});
+test('completed explicit searches persist the full query without refetching or retaining expiring media data',()=>{
+ const before=calls.length,now=Date.now();Service.remember('同名',settings,[group('同名电影','a'),{...group('同名剧集','b'),year:'2020'}],now);
+ const cached=Service.peek('同名',settings);assert.equal(calls.length,before);assert.equal(cached.results.length,2);
+ assert.equal(cached.updatedAt,now);assert.equal(cached.results[0].items[0].playUrl,undefined);
+ assert.equal(cached.results[0].items[0].content,undefined);
+ const session=new Session();session.open('同名',settings,{results:[group('同名电影','a')],updatedAt:now});
+ assert.equal(calls.length,before);assert.equal(session.state.fromSeed,false);assert.equal(session.state.results.length,2);session.close();
+});

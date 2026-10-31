@@ -18,11 +18,15 @@ import { SourceManager } from '../data/SourceManager';
 import { HistoryStore } from '../data/HistoryStore';
 import { SourceProbeService } from '../data/SourceProbeService';
 import { SourceProbeResult } from '../model/SourceProbe';
+import { SearchDiscovery } from '../model/SearchDiscovery';
 
 export interface DiscoveryPageParam {
   item: RecommendItem;
   origin: PosterOrigin;
   openId: number;
+  searchResult?: MergedVideo;
+  searchUpdatedAt?: number;
+  searchKeyword?: string;
 }
 
 /** A full-screen destination: hero motion, catalogue metadata and source lookup never gate one another. */
@@ -97,8 +101,11 @@ export struct DiscoveryPage {
       Number.isFinite(origin.height) && origin.width > 0 && origin.height > 0 ?
       origin : { x: 40, y: 132, width: 185, height: 293 };
     const id = param.item.metadataProvider === 'douban' ? param.item.id : '';
-    this.info = PosterMetadataService.peek(id) || PosterCardData.empty(id, param.item.isTv);
-    this.param = { item: param.item, origin: this.hero, openId: param.openId };
+    const catalogue = param.searchResult !== undefined ? SearchDiscovery.info(param.searchResult) : PosterCardData.empty(id, param.item.isTv);
+    const cached = PosterMetadataService.peek(id);
+    this.info = cached !== null ? SearchDiscovery.enrich(cached, catalogue) : catalogue;
+    this.param = { item: param.item, origin: this.hero, openId: param.openId,
+      searchResult: param.searchResult, searchUpdatedAt: param.searchUpdatedAt, searchKeyword: param.searchKeyword };
     this.generation++;
     this.session.close();
     this.results = { results: [], refreshing: false, updatedAt: 0, failedCount: 0, error: '' };
@@ -109,6 +116,10 @@ export struct DiscoveryPage {
   }
 
   private loadMetadata(): void {
+    if (this.param.searchResult !== undefined) {
+      this.loadSearchMetadata(this.param.searchResult, ++this.generation);
+      return;
+    }
     const id = this.item.metadataProvider === 'douban' ? this.item.id : '';
     const cached = PosterMetadataService.peek(id);
     if (cached !== null) this.info = cached;
@@ -120,6 +131,45 @@ export struct DiscoveryPage {
       if (info !== null) this.info = info;
       this.infoLoading = false;
     });
+  }
+
+  private async loadSearchMetadata(selection: MergedVideo, token: number): Promise<void> {
+    this.infoLoading = true;
+    let catalogue = SearchDiscovery.info(selection);
+    let id = SearchDiscovery.doubanId(selection);
+    try {
+      const first = this.sourceRows()[0]?.items[0];
+      const config = first !== undefined ? SourceManager.shared().getVodSource(first.sourceKey) : null;
+      if (first !== undefined && config !== null) {
+        const detail = await DetailCache.load(first.sourceKey, first.vodId, () => CmsClient.detail(config, first.vodId));
+        if (!this.alive || !this.showing || token !== this.generation) return;
+        catalogue = SearchDiscovery.enrich(SearchDiscovery.info(selection, detail), catalogue);
+        id = SearchDiscovery.doubanId(selection, detail);
+      }
+    } catch (e) { /* Search text and resource choices remain available if catalogue enrichment fails. */ }
+    if (!this.alive || !this.showing || token !== this.generation) return;
+    const cached = PosterMetadataService.peek(id);
+    this.info = cached !== null ? SearchDiscovery.enrich(cached, catalogue) : catalogue;
+    if (id !== '') {
+      this.item = { id: id, title: this.item.title, cover: this.item.cover, isTv: catalogue.isSeries, metadataProvider: 'douban' };
+      const info = await PosterMetadataService.request(id, catalogue.isSeries, true);
+      if (!this.alive || !this.showing || token !== this.generation) return;
+      if (info !== null) this.info = SearchDiscovery.enrich(info, catalogue);
+    }
+    this.infoLoading = false;
+  }
+
+  private sourceRows(): MergedVideo[] {
+    const selection = this.param.searchResult;
+    if (selection === undefined) return this.results.results;
+    const settings = SettingsStore.shared().get();
+    return SearchDiscovery.selected(selection, this.results.results).map((result: MergedVideo): MergedVideo => ({
+      name: result.name, year: result.year, pic: result.pic, typeName: result.typeName, area: result.area, remarks: result.remarks,
+      items: result.items.filter((item: SearchItem) => {
+        const source = SourceManager.shared().getVodSource(item.sourceKey);
+        return source !== null && source.enabled && (!settings.adultFilter || !source.isAdult);
+      })
+    })).filter((result: MergedVideo) => result.items.length > 0);
   }
 
   private enter(): void {
@@ -257,16 +307,17 @@ export struct DiscoveryPage {
   }
 
   private cacheLabel(): string {
+    if (this.results.fromSeed) return '已找到 · 来自搜索结果';
     if (this.results.updatedAt === 0) return this.results.refreshing ? '正在查找可用片源' : '尚无缓存';
     const hours = Math.max(0, Math.floor((Date.now() - this.results.updatedAt) / 3600000));
     return '已缓存 · ' + (hours === 0 ? '刚刚更新' : (hours < 24 ? hours + ' 小时前更新' : Math.floor(hours / 24) + ' 天前更新'));
   }
 
   @Builder
-  private field(label: string, value: string) {
+  private field(label: string) {
     Row({ space: 12 }) {
       Text(label).fontSize(13).fontColor('#A1ACBE').width(44)
-      Text(value !== '' ? value : '暂未提供').fontSize(14).fontColor('#E7ECF5').layoutWeight(1)
+      Text((label === '导演' ? this.info.directors : this.info.actors).join(' / ') || '暂未提供').fontSize(14).fontColor('#E7ECF5').layoutWeight(1)
         .maxLines(label === '主演' ? 3 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
     }.width('100%').alignItems(VerticalAlign.Top)
   }
@@ -297,8 +348,8 @@ export struct DiscoveryPage {
   @Builder
   private credits() {
     Column({ space: 12 }) {
-      this.field('导演', this.info.directors.join(' / '))
-      this.field('主演', this.info.actors.slice(0, 8).join(' / '))
+      this.field('导演')
+      this.field('主演')
     }.width(this.columns().poster.width).alignItems(HorizontalAlign.Start)
   }
 
@@ -318,9 +369,9 @@ export struct DiscoveryPage {
       Text('HTTP 耗时 · 码流采样 / 清单上限 ≤ / 源标注').fontSize(10).fontColor('#8F9EB3').width('100%')
       if (this.results.error !== '') Text(this.results.error).fontSize(12).fontColor('#E1BE8B').width('100%')
       if (this.results.failedCount > 0) Text(this.results.failedCount + ' 个片源未能更新').fontSize(12).fontColor('#B3BDD0').width('100%')
-      if (this.results.results.length > 0) {
+      if (this.sourceRows().length > 0) {
         List({ space: 10 }) {
-          ForEach(this.results.results, (result: MergedVideo) => {
+          ForEach(this.sourceRows(), (result: MergedVideo) => {
             ListItem() {
               Column({ space: 8 }) {
                 Row({ space: 8 }) {
@@ -387,7 +438,8 @@ export struct DiscoveryPage {
         Column() { this.sourceResults() }.position({ x: this.columns().resultsX, y: this.columns().bodyY }).opacity(this.panelsOpacity)
         ForEach([this.item], (item: RecommendItem) => {
           TvPosterCard({ title: item.title, poster: item.cover, rating: item.rating || '',
-            subjectId: item.metadataProvider === 'douban' ? item.id : '', seriesHint: item.isTv })
+            subjectId: item.metadataProvider === 'douban' ? item.id : '', seriesHint: item.isTv,
+            catalogueInfo: this.info })
             .width(this.param.origin.width).height(this.param.origin.height)
             .position({ x: this.param.origin.x, y: this.param.origin.y })
             .scale({ x: this.hero.width / this.param.origin.width, y: this.hero.height / this.param.origin.height,
@@ -411,7 +463,9 @@ export struct DiscoveryPage {
         if (latest !== null) this.apply(latest as DiscoveryPageParam);
         BackNavigation.register('Discovery', () => this.back());
         this.loadMetadata();
-        this.session.open(this.item.title, SettingsStore.shared().get());
+        const selection = this.param.searchResult;
+        this.session.open(this.param.searchKeyword || this.item.title, SettingsStore.shared().get(), selection !== undefined ?
+          { results: [selection], updatedAt: this.param.searchUpdatedAt || 0 } : undefined);
         const opening = !this.entered;
         this.enter();
         this.startProbes(opening ? 700 : 32);

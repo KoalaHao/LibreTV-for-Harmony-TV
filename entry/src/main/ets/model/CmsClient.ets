@@ -111,6 +111,7 @@ export class CmsClient {
         actor: CmsClient.optStr(vod['vod_actor']),
         director: CmsClient.optStr(vod['vod_director']),
         content: CmsClient.optStr(vod['vod_content']),
+        doubanId: CmsClient.optStr(vod['vod_douban_id']),
         playFrom: CmsClient.optStr(vod['vod_play_from']),
         playUrl: CmsClient.optStr(vod['vod_play_url'])
       });
@@ -167,6 +168,7 @@ export class CmsClient {
         title: CmsClient.str(vod['vod_name']),
         cover: CmsClient.optStr(vod['vod_pic']),
         desc: CmsClient.optStr(vod['vod_content']),
+        doubanId: CmsClient.optStr(vod['vod_douban_id']),
         typeName: CmsClient.optStr(vod['type_name']),
         year: CmsClient.optStr(vod['vod_year']),
         area: CmsClient.optStr(vod['vod_area']),

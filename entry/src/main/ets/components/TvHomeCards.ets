@@ -70,6 +70,7 @@ export struct TvContinueCard {
 @Component
 export struct TvPosterCard {
   @Prop @Watch('subjectChanged') subjectId: string = '';
+  @Prop @Watch('subjectChanged') catalogueInfo: PosterCardInfo = PosterCardData.empty();
   @Prop seriesHint: boolean = false;
   @Prop title: string = '';
   @Prop poster: string = '';
@@ -107,8 +108,9 @@ export struct TvPosterCard {
     this.loadedVisible = false;
     this.liveKnown = false;
     const cached = PosterMetadataService.peek(this.subjectId);
-    this.info = cached !== null ? cached : PosterCardData.empty(this.subjectId, this.seriesHint);
-    this.infoKnown = cached !== null;
+    this.info = cached !== null ? cached : this.catalogueInfo;
+    this.infoKnown = cached !== null || this.catalogueInfo.genres.length > 0 || this.catalogueInfo.countries.length > 0 ||
+      this.catalogueInfo.releaseDate !== '' || this.catalogueInfo.detailsLoaded;
     if (this.visible) this.loadDetails();
     this.syncRefreshTimer();
   }
