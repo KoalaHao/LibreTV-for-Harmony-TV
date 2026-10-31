@@ -38,11 +38,41 @@ test('a late gain result for a previous video cannot publish into the newly conf
  assert.equal(await old,false);assert.deepEqual(states,[['applying',6]]);
  c.release();assert.equal(await c.setLoudnessGain(12),false);
 });
-test('an audio service that never answers cannot block autoplay or leave gain controls pending forever',async()=>{
+test('an unfulfilled native Promise cannot block autoplay and reports requested rather than failed or verified',async()=>{
  const {c,p,calls}=await setup();const states=[];c.onLoudnessState=(s,v)=>states.push([s,v]);
  p.setLoudnessGain=v=>{calls.push(['gain',v]);return new Promise(()=>{});};
  await c.playUrl('https://media.test/hung-gain.m3u8',{});p.state='prepared';p.listeners.get('stateChange')('prepared');
  await flush();assert.deepEqual(calls,[['gain',0],['play']]);assert.equal(p.state,'playing');
- await new Promise(resolve=>setTimeout(resolve,1100));assert.deepEqual(states.at(-1),['unavailable',0]);
+ await new Promise(resolve=>setTimeout(resolve,1100));assert.deepEqual(states.at(-1),['requested',0]);
  p.setLoudnessGain=async v=>calls.push(['gain',v]);assert.equal(await c.setLoudnessGain(6),true);c.release();
+});
+test('a native implementation with unfulfilled Promises still allows six, twelve and off while paused',async()=>{
+ const {c,p,calls}=await setup();const states=[];p.state='paused';c.onLoudnessState=(s,v)=>states.push([s,v]);
+ p.setLoudnessGain=v=>{calls.push(['gain',v]);return new Promise(()=>{});};
+ for(const gain of [6,12,0])assert.equal(await c.setLoudnessGain(gain),true);
+ assert.deepEqual(calls,[['gain',6],['gain',12],['gain',0]]);assert.equal(p.state,'paused');
+ assert.deepEqual(states.filter(([s])=>s==='requested'),[['requested',6],['requested',12],['requested',0]]);
+ assert.equal(states.some(([s])=>s==='applied'||s==='unavailable'),false);c.release();
+});
+test('a late rejection after the compatibility wait rolls back the accepted preference',async()=>{
+ const {c,p}=await setup();let reject;const states=[];p.state='playing';c.onLoudnessState=(s,v)=>states.push([s,v]);
+ p.setLoudnessGain=()=>new Promise((_,fail)=>reject=fail);
+ assert.equal(await c.setLoudnessGain(6),true);assert.deepEqual(states.at(-1),['requested',6]);
+ reject(Error('unsupported'));await flush();assert.deepEqual(states.at(-1),['unavailable',0]);
+ p.setLoudnessGain=async()=>{};assert.equal(await c.setLoudnessGain(12),true);c.release();
+});
+test('late native gain errors roll back without stopping video and unrelated media failures are not swallowed',async()=>{
+ const {c,p}=await setup();const errors=[],states=[];p.state='playing';c.onError=e=>errors.push(e);c.onLoudnessState=(s,v)=>states.push([s,v]);
+ p.setLoudnessGain=()=>new Promise(()=>{});assert.equal(await c.setLoudnessGain(6),true);
+ p.listeners.get('error')({code:5400102,message:'unsupport stream type'});
+ assert.deepEqual(states.at(-1),['unavailable',0]);assert.deepEqual(errors,[]);assert.equal(p.state,'playing');
+ p.setLoudnessGain=async()=>{p.listeners.get('error')({code:5400105,message:'Service died'});};
+ await c.setLoudnessGain(12);assert.equal(errors.length,1);c.release();
+});
+test('a previous source rejection cannot roll back a newly configured source',async()=>{
+ const {c,p}=await setup();let reject;const states=[];p.state='playing';c.onLoudnessState=(s,v)=>states.push([s,v]);
+ p.setLoudnessGain=()=>new Promise((_,fail)=>reject=fail);
+ const old=c.setLoudnessGain(6);await flush();c.configureLoudnessGain(0);reject(Error('old source'));
+ assert.equal(await old,false);assert.deepEqual(states,[['applying',6]]);
+ p.setLoudnessGain=async()=>{};assert.equal(await c.setLoudnessGain(12),true);assert.deepEqual(states.at(-1),['applied',12]);c.release();
 });

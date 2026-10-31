@@ -529,6 +529,10 @@ export struct PlayerPage {
     this.player.onLoudnessState = (state: string, gainDb: number) => {
       if (this.released) return;
       this.loudnessState = state;
+      if (state === 'unavailable' && this.loudnessGainDb !== gainDb) {
+        this.loudnessGainDb = gainDb;
+        this.saveProgress();
+      }
     };
     this.player.onSuperResolutionState = (state: string) => {
       this.superResolutionState = state;
@@ -2139,6 +2143,9 @@ export struct PlayerPage {
   private loudnessLabel(): string {
     if (this.loudnessBusy || this.loudnessState === 'applying') return '声音补偿 · 设置中';
     if (this.loudnessState === 'unavailable') return '声音补偿 · 暂不可用';
+    if (this.loudnessState === 'requested' && this.loudnessGainDb > 0) {
+      return '声音补偿 +' + this.loudnessGainDb + ' dB · 已请求';
+    }
     return this.loudnessGainDb > 0 ? '声音补偿 +' + this.loudnessGainDb + ' dB' : '声音补偿 · 关';
   }
 
@@ -2148,9 +2155,9 @@ export struct PlayerPage {
     const vodId = this.vodId;
     const gain = this.loudnessGainDb === 0 ? 6 : (this.loudnessGainDb === 6 ? 12 : 0);
     this.loudnessBusy = true;
-    const applied = await this.player.setLoudnessGain(gain);
+    const accepted = await this.player.setLoudnessGain(gain);
     if (this.released || this.sourceKey !== sourceKey || this.vodId !== vodId) return;
-    if (applied) {
+    if (accepted) {
       this.loudnessGainDb = gain;
       this.saveProgress();
     } else this.toast('当前音频通路暂不支持声音补偿');
@@ -2393,56 +2400,58 @@ export struct PlayerPage {
                 .padding({ left: 12, right: 12 }).height(32).textAlign(TextAlign.Center)
                 .backgroundColor('#5037475D').borderRadius(16).focusable(true).focusBox(TV_FOCUS)
                 .onClick(() => { this.openAdDiagnostics(); })
-              // 收藏星标：点播播放页内即可收藏/取消，与详情页、直播页同款。
-              Stack({ alignContent: Alignment.Center }) {
-                Image(this.favorite ? $r('app.media.ic_player_star_filled') : $r('app.media.ic_player_star'))
-                  .width(20)
-                  .height(20)
-                  .fillColor(this.favorite ? $r('app.color.color_primary') : $r('app.color.color_text'))
+              if (!DevicePolicy.isTV()) {
+                // 手机保留原操作；电视去除收藏、分享和方向切换按钮。
+                Stack({ alignContent: Alignment.Center }) {
+                  Image(this.favorite ? $r('app.media.ic_player_star_filled') : $r('app.media.ic_player_star'))
+                    .width(20)
+                    .height(20)
+                    .fillColor(this.favorite ? $r('app.color.color_primary') : $r('app.color.color_text'))
+                }
+                .width(34)
+                .height(34)
+                .borderRadius(17)
+                .backgroundColor($r('app.color.color_player_scrim'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
+                .onClick(() => {
+                  this.toggleFav();
+                })
+                // 分享：与详情页同一个入口，但带上「当前这一集 + 播放中」的信息
+                Stack({ alignContent: Alignment.Center }) {
+                  Image($r('app.media.ic_share'))
+                    .width(20)
+                    .height(20)
+                    .fillColor($r('app.color.color_text'))
+                }
+                .width(34)
+                .height(34)
+                .borderRadius(17)
+                .backgroundColor($r('app.color.color_player_scrim'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
+                .onClick(() => {
+                  this.showShareOptions();
+                })
+                Stack({ alignContent: Alignment.Center }) {
+                  Image($r('app.media.ic_player_fullscreen'))
+                    .width(18)
+                    .height(18)
+                    .fillColor($r('app.color.color_text'))
+                    .opacity(this.landscape ? 1 : 0.85)
+                }
+                .width(34)
+                .height(34)
+                .borderRadius(17)
+                .backgroundColor($r('app.color.color_player_scrim'))
+                .focusable(true)
+                .focusBox(TV_FOCUS)
+                .onClick(() => {
+                  // 横屏 -> 竖屏（退出全屏）；竖屏 -> 横屏（重新全屏）
+                  // 画面会随容器尺寸重新等比计算并居中，不会拉伸
+                  this.setLandscape(!this.landscape);
+                })
               }
-              .width(34)
-              .height(34)
-              .borderRadius(17)
-              .backgroundColor($r('app.color.color_player_scrim'))
-              .focusable(true)
-              .focusBox(TV_FOCUS)
-              .onClick(() => {
-                this.toggleFav();
-              })
-              // 分享：与详情页同一个入口，但带上「当前这一集 + 播放中」的信息
-              Stack({ alignContent: Alignment.Center }) {
-                Image($r('app.media.ic_share'))
-                  .width(20)
-                  .height(20)
-                  .fillColor($r('app.color.color_text'))
-              }
-              .width(34)
-              .height(34)
-              .borderRadius(17)
-              .backgroundColor($r('app.color.color_player_scrim'))
-              .focusable(true)
-              .focusBox(TV_FOCUS)
-              .onClick(() => {
-                this.showShareOptions();
-              })
-              Stack({ alignContent: Alignment.Center }) {
-                Image($r('app.media.ic_player_fullscreen'))
-                  .width(18)
-                  .height(18)
-                  .fillColor($r('app.color.color_text'))
-                  .opacity(this.landscape ? 1 : 0.85)
-              }
-              .width(34)
-              .height(34)
-              .borderRadius(17)
-              .backgroundColor($r('app.color.color_player_scrim'))
-              .focusable(true)
-              .focusBox(TV_FOCUS)
-              .onClick(() => {
-                // 横屏 -> 竖屏（退出全屏）；竖屏 -> 横屏（重新全屏）
-                // 画面会随容器尺寸重新等比计算并居中，不会拉伸
-                this.setLandscape(!this.landscape);
-              })
             }
             .width('100%')
             // 横屏：贴屏幕物理顶边（留白会让画面顶部多出一块，看着不像全屏）。
@@ -2600,23 +2609,25 @@ export struct PlayerPage {
                         this.selectEpisode(this.currentEp + 1);
                       })
                   }
-                  // 投屏：系统提供的投屏图标，点按拉起系统投屏设备列表
-                  Row() {
-                    AVCastPicker({
-                      normalColor: '#FFFFFF',
-                      activeColor: Color.White,
-                      pickerStyle: AVCastPickerStyle.STYLE_MENU,
-                      colorMode: AVCastPickerColorMode.AUTO,
-                      sessionType: 'video'
-                    })
-                      .width(24)
-                      .height(24)
+                  if (!DevicePolicy.isTV()) {
+                    // 手机保留系统投屏入口。
+                    Row() {
+                      AVCastPicker({
+                        normalColor: '#FFFFFF',
+                        activeColor: Color.White,
+                        pickerStyle: AVCastPickerStyle.STYLE_MENU,
+                        colorMode: AVCastPickerColorMode.AUTO,
+                        sessionType: 'video'
+                      })
+                        .width(24)
+                        .height(24)
+                    }
+                    .height(28)
+                    .padding({ left: 5, right: 5 })
+                    .backgroundColor('#26FFFFFF')
+                    .borderRadius(14)
+                    .justifyContent(FlexAlign.Center)
                   }
-                  .height(28)
-                  .padding({ left: 5, right: 5 })
-                  .backgroundColor('#26FFFFFF')
-                  .borderRadius(14)
-                  .justifyContent(FlexAlign.Center)
 
                   // 横屏/大屏下补一个「铺满屏/适应屏」切换：车机等大屏可去掉黑边最大化画面
                   if (this.canvasW > this.canvasH && this.offlineDir === '') {

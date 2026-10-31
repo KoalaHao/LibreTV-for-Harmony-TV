@@ -25,6 +25,16 @@ export interface VideoStreamInfo {
   bitrate: number;
 }
 
+interface LoudnessRequest {
+  player: media.AVPlayer;
+  generation: number;
+  sourceGeneration: number;
+  previousDb: number;
+  gainDb: number;
+  failed: boolean;
+  state: string;
+}
+
 export class AvPlayerController {
   private player: media.AVPlayer | null = null;
   private surfaceId: string = '';
@@ -54,42 +64,81 @@ export class AvPlayerController {
   private loudnessGeneration: number = 0;
   private loudnessTask: Promise<boolean> = Promise.resolve(true);
   private loudnessPending: boolean = false;
-  private loudnessFailed: boolean = false;
+  private loudnessRequest: LoudnessRequest | null = null;
   onLoudnessState: (state: string, gainDb: number) => void = () => {};
 
   configureLoudnessGain(gainDb: number): void {
     this.loudnessGeneration++;
+    this.loudnessRequest = null;
+    this.loudnessPending = false;
     this.loudnessGainDb = [0, 6, 12].indexOf(gainDb) >= 0 ? gainDb : 0;
   }
 
-  /** Serialized player-local gain; an old source's response cannot update the new source. */
+  private currentLoudnessRequest(request: LoudnessRequest): boolean {
+    return this.player === request.player && this.loudnessRequest === request &&
+      this.loudnessGeneration === request.generation && this.sourceGeneration === request.sourceGeneration;
+  }
+
+  private rejectLoudness(request: LoudnessRequest): void {
+    if (!this.currentLoudnessRequest(request) || request.failed) return;
+    request.failed = true;
+    request.state = 'unavailable';
+    this.loudnessGainDb = request.previousDb;
+    this.onLoudnessState('unavailable', request.previousDb);
+  }
+
+  /** Returns whether the request was accepted; requested is distinct from a fulfilled native Promise. */
   setLoudnessGain(gainDb: number): Promise<boolean> {
     const previous = this.loudnessGainDb;
     this.configureLoudnessGain(gainDb);
     const generation = this.loudnessGeneration;
+    const sourceGeneration = this.sourceGeneration;
     const player = this.player;
     const value = this.loudnessGainDb;
     const task = this.loudnessTask.then(async (): Promise<boolean> => {
-      if (player === null || this.player !== player || generation !== this.loudnessGeneration) return false;
+      if (player === null || this.player !== player || generation !== this.loudnessGeneration ||
+        sourceGeneration !== this.sourceGeneration) return false;
       if (['prepared', 'playing', 'paused', 'completed', 'stopped'].indexOf(player.state) < 0) return false;
+      const request: LoudnessRequest = { player, generation, sourceGeneration, previousDb: previous,
+        gainDb: value, failed: false, state: 'applying' };
+      this.loudnessRequest = request;
       this.loudnessPending = true;
-      this.loudnessFailed = false;
       this.onLoudnessState('applying', value);
-      let applied = false;
+      let state = 'unavailable';
       let timer = -1;
       try {
         if (typeof player.setLoudnessGain !== 'function') throw new Error('Loudness gain unavailable');
-        const command = player.setLoudnessGain(value).then((): boolean => true, (): boolean => false);
-        const timeout = new Promise<boolean>((resolve: (value: boolean) => void) => {
-          timer = setTimeout(() => resolve(false), 1000);
+        const command = new Promise<string>((resolve: (state: string) => void) => {
+          const result: Promise<void> | undefined = player.setLoudnessGain(value);
+          // Some native implementations enqueue the command but never settle the returned Promise.
+          if (result !== undefined) result.then(() => {
+            if (this.currentLoudnessRequest(request) && !request.failed && request.state === 'requested') {
+              request.state = 'applied';
+              this.onLoudnessState('applied', value);
+            }
+            resolve('applied');
+          }, () => {
+            this.rejectLoudness(request);
+            resolve('unavailable');
+          });
         });
-        applied = await Promise.race([command, timeout]) && !this.loudnessFailed;
-      } catch (e) { applied = false; }
-      finally { if (timer >= 0) clearTimeout(timer); this.loudnessPending = false; }
-      if (this.player !== player || generation !== this.loudnessGeneration) return false;
-      if (!applied) this.loudnessGainDb = previous;
-      this.onLoudnessState(applied ? 'applied' : 'unavailable', value);
-      return applied;
+        const timeout = new Promise<string>((resolve: (state: string) => void) => {
+          timer = setTimeout(() => resolve('requested'), 1000);
+        });
+        state = await Promise.race([command, timeout]);
+      } catch (e) { this.rejectLoudness(request); }
+      finally {
+        if (timer >= 0) clearTimeout(timer);
+        if (this.loudnessRequest === request) this.loudnessPending = false;
+      }
+      if (!this.currentLoudnessRequest(request)) return false;
+      if (request.failed || state === 'unavailable') {
+        this.rejectLoudness(request);
+        return false;
+      }
+      request.state = state;
+      this.onLoudnessState(state, value);
+      return true;
     });
     this.loudnessTask = task;
     return task;
@@ -545,9 +594,12 @@ export class AvPlayerController {
     });
     player.on('error', (err: BusinessError) => {
       if (this.player !== player) return;
-      if (this.player === player && this.loudnessPending && player.state !== 'error' &&
-        [5400102, 5400105, 5400108].indexOf(err.code) >= 0) {
-        this.loudnessFailed = true;
+      const gainRequest = this.loudnessRequest;
+      const gainError = /loudness|响度|unsupport stream type/i.test(err.message || '');
+      if (gainRequest !== null && this.currentLoudnessRequest(gainRequest) && player.state !== 'error' &&
+        [401, 801, 5400102, 5400108].indexOf(err.code) >= 0 &&
+        (gainError || (this.loudnessPending && !err.message))) {
+        this.rejectLoudness(gainRequest);
         return;
       }
       if (this.superResolutionFeature && (err.code === 5410003 || err.code === 5410004)) {
@@ -890,6 +942,8 @@ export class AvPlayerController {
     this.srRequestSerial++;
     this.clearSrRecovery();
     this.loudnessGeneration++;
+    this.loudnessRequest = null;
+    this.loudnessPending = false;
     this.sourceGeneration++;
     this.infoReadId++;
     this.currentSource = null;
