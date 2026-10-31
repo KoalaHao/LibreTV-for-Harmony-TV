@@ -65,7 +65,64 @@ export class AvPlayerController {
   private loudnessTask: Promise<boolean> = Promise.resolve(true);
   private loudnessPending: boolean = false;
   private loudnessRequest: LoudnessRequest | null = null;
+  private audioStreams: audio.AudioStreamManager | null = null;
+  private audioRendererSignature: string = '';
+  private audioGainRefreshTimer: number = -1;
+  private readonly audioRendererChanged = (infos: audio.AudioRendererChangeInfoArray): void => {
+    const signature = this.movieRendererSignature(infos);
+    if (signature === this.audioRendererSignature) return;
+    this.audioRendererSignature = signature;
+    this.clearAudioGainRefresh();
+    if (signature !== '') this.scheduleLoudnessRestore('movie audio stream changed');
+  };
   onLoudnessState: (state: string, gainDb: number) => void = () => {};
+
+  /** HLS format changes can replace the audio sink without another prepared event. */
+  private scheduleLoudnessRestore(reason: string): void {
+    const player = this.player;
+    if (player === null || this.loudnessGainDb <= 0 ||
+      ['prepared', 'playing', 'paused'].indexOf(player.state) < 0) return;
+    this.clearAudioGainRefresh();
+    const source = this.sourceGeneration;
+    const request = this.loudnessGeneration;
+    this.audioGainRefreshTimer = setTimeout(() => {
+      this.audioGainRefreshTimer = -1;
+      if (this.player !== player || source !== this.sourceGeneration || request !== this.loudnessGeneration ||
+        this.loudnessGainDb <= 0) return;
+      console.info('[player] ' + reason + '; restoring loudness ' + this.loudnessGainDb + ' dB');
+      this.setLoudnessGain(this.loudnessGainDb);
+    }, 250);
+  }
+
+  private movieRendererSignature(infos: audio.AudioRendererChangeInfoArray): string {
+    return infos.filter((info) => info.rendererInfo.usage === audio.StreamUsage.STREAM_USAGE_MOVIE)
+      .map((info) => info.streamId.toString()).sort().join(',');
+  }
+
+  private clearAudioGainRefresh(): void {
+    if (this.audioGainRefreshTimer >= 0) clearTimeout(this.audioGainRefreshTimer);
+    this.audioGainRefreshTimer = -1;
+  }
+
+  private watchAudioRenderers(): void {
+    if (this.audioStreams !== null || typeof audio.getAudioManager !== 'function') return;
+    try {
+      const streams = audio.getAudioManager().getStreamManager();
+      try { this.audioRendererSignature = this.movieRendererSignature(streams.getCurrentAudioRendererInfoArraySync()); }
+      catch (e) { this.audioRendererSignature = ''; }
+      streams.on('audioRendererChange', this.audioRendererChanged);
+      this.audioStreams = streams;
+    } catch (e) { /* Optional audio-route observation must not prevent playback. */ }
+  }
+
+  private stopAudioRendererWatch(): void {
+    this.clearAudioGainRefresh();
+    if (this.audioStreams !== null) {
+      try { this.audioStreams.off('audioRendererChange', this.audioRendererChanged); } catch (e) { /* Already released. */ }
+    }
+    this.audioStreams = null;
+    this.audioRendererSignature = '';
+  }
 
   configureLoudnessGain(gainDb: number): void {
     this.loudnessGeneration++;
@@ -522,6 +579,7 @@ export class AvPlayerController {
       return;
     }
     this.eventsBound = true;
+    this.watchAudioRenderers();
     if (this.superResolutionFeature) {
       try {
         player.on('superResolutionChanged', (enabled: boolean) => {
@@ -635,12 +693,22 @@ export class AvPlayerController {
         this.onProgress(time, this.lastDurationMs);
       }
     });
+    try {
+      player.on('trackInfoUpdate', () => {
+        if (this.player !== player) return;
+        this.readVideoInfo(player);
+        this.scheduleLoudnessRestore('track metadata changed');
+      });
+    } catch (e) { /* Older playback services may omit optional metadata events. */ }
     player.on('videoSizeChange', (width: number, height: number) => {
       if (this.player !== player) return;
       if (player.state === 'prepared' || player.state === 'playing' || player.state === 'paused') {
         this.readVideoInfo(player);
       }
       if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+        if (this.srWidth > 0 && (width !== this.srWidth || height !== this.srHeight)) {
+          this.scheduleLoudnessRestore('video format changed');
+        }
         this.srWidth = width; this.srHeight = height;
         if (this.superResolutionActive && this.srActiveWidth === 0) { this.srActiveWidth = width; this.srActiveHeight = height; }
         if (this.srActiveWidth > 0 && !this.atActiveSrSize()) {
@@ -939,6 +1007,7 @@ export class AvPlayerController {
 
   /** 释放播放器（页面销毁时调用） */
   release(): void {
+    this.stopAudioRendererWatch();
     this.srRequestSerial++;
     this.clearSrRecovery();
     this.loudnessGeneration++;
@@ -968,6 +1037,7 @@ export class AvPlayerController {
   }
 
   private releasePlayer(): void {
+    this.stopAudioRendererWatch();
     this.srRequestSerial++;
     this.clearSrRecovery();
     const old = this.player;

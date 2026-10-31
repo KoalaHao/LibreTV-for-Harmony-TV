@@ -1293,7 +1293,7 @@ export struct PlayerPage {
   }
 
   private onSliderChange(value: number, mode: SliderChangeMode): void {
-    if (mode === SliderChangeMode.End) {
+    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
       const target: number = value * 1000;
       this.player.seekTo(target);
       this.applySeekUi(target);

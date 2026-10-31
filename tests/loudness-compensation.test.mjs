@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadEts } from './ets-loader.mjs';
 let native;
+globalThis.__loudnessAudio={StreamUsage:{STREAM_USAGE_MOVIE:3}};
 globalThis.__loudnessMedia={createAVPlayer:async()=>native,createMediaSourceWithUrl:(url,headers)=>({url,headers})};
 const {AvPlayerController:Player}=await loadEts('player/AvPlayerController.ets',[
  ["import { media } from '@kit.MediaKit';",'const media=globalThis.__loudnessMedia;'],
- ["import { audio } from '@kit.AudioKit';",'const audio={StreamUsage:{STREAM_USAGE_MOVIE:3}};'],
+ ["import { audio } from '@kit.AudioKit';",'const audio=globalThis.__loudnessAudio;'],
  ["import { BusinessError } from '@kit.BasicServicesKit';",'']
 ]);
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -83,4 +84,37 @@ test('the maximum 24 dB setting reaches the movie renderer, while a saved out-of
  c.configureLoudnessGain(36);await c.playUrl('https://media.test/invalid-saved-gain.m3u8',{});
  p.state='prepared';p.listeners.get('stateChange')('prepared');await flush();
  assert.deepEqual(calls.slice(-2),[['gain',0],['play']]);assert.equal(calls.some(([name,value])=>name==='gain'&&value===36),false);c.release();
+});
+test('an audio renderer rebuilt at an ad boundary receives the current gain without restarting or seeking video',async()=>{
+ let callback;const removals=[];
+ const info=id=>({streamId:id,rendererInfo:{usage:3},deviceDescriptors:[]});
+ globalThis.__loudnessAudio.getAudioManager=()=>({getStreamManager:()=>({
+  getCurrentAudioRendererInfoArraySync:()=>[info(100)],on(type,cb){callback=cb;},off(type,cb){removals.push([type,cb]);}
+ })});
+ const {c,p,calls}=await setup();p.state='playing';assert.equal(await c.setLoudnessGain(24),true);
+ callback([info(200)]);await new Promise(resolve=>setTimeout(resolve,300));
+ assert.deepEqual(calls,[['gain',24],['gain',24]]);assert.equal(p.state,'playing');
+ callback([info(200)]);await new Promise(resolve=>setTimeout(resolve,300));assert.equal(calls.length,2);
+ c.configureLoudnessGain(0);callback([info(300)]);await new Promise(resolve=>setTimeout(resolve,300));assert.equal(calls.length,2);
+ c.release();assert.deepEqual(removals,[['audioRendererChange',callback]]);delete globalThis.__loudnessAudio.getAudioManager;
+});
+test('unrelated renderers, a source switch and release cannot restore an old source gain',async()=>{
+ let callback;const info=(id,usage=3)=>({streamId:id,rendererInfo:{usage},deviceDescriptors:[]});
+ globalThis.__loudnessAudio.getAudioManager=()=>({getStreamManager:()=>({
+  getCurrentAudioRendererInfoArraySync:()=>[info(1)],on(type,cb){callback=cb;},off(){}
+ })});
+ const {c,p,calls}=await setup();p.state='playing';await c.setLoudnessGain(12);
+ callback([info(1),info(2,4)]);await new Promise(resolve=>setTimeout(resolve,300));assert.deepEqual(calls,[['gain',12]]);
+ callback([info(3)]);c.configureLoudnessGain(0);await new Promise(resolve=>setTimeout(resolve,300));assert.equal(calls.length,1);
+ c.configureLoudnessGain(24);callback([info(4)]);c.release();await new Promise(resolve=>setTimeout(resolve,300));assert.equal(calls.length,1);
+ delete globalThis.__loudnessAudio.getAudioManager;
+});
+test('format metadata changes restore gain even if the renderer ID is reused, while a manual off cancels restoration',async()=>{
+ const {c,p,calls}=await setup();p.state='paused';await c.setLoudnessGain(12);
+ p.listeners.get('trackInfoUpdate')([]);await new Promise(resolve=>setTimeout(resolve,300));
+ assert.deepEqual(calls,[['gain',12],['gain',12]]);assert.equal(p.state,'paused');
+ p.listeners.get('videoSizeChange')(1920,1080);p.listeners.get('videoSizeChange')(1280,720);
+ await new Promise(resolve=>setTimeout(resolve,300));assert.deepEqual(calls.at(-1),['gain',12]);assert.equal(calls.length,3);
+ p.listeners.get('trackInfoUpdate')([]);await c.setLoudnessGain(0);
+ await new Promise(resolve=>setTimeout(resolve,300));assert.deepEqual(calls.at(-1),['gain',0]);assert.equal(calls.length,4);c.release();
 });
