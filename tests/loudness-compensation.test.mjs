@@ -76,3 +76,11 @@ test('a previous source rejection cannot roll back a newly configured source',as
  assert.equal(await old,false);assert.deepEqual(states,[['applying',6]]);
  p.setLoudnessGain=async()=>{};assert.equal(await c.setLoudnessGain(12),true);assert.deepEqual(states.at(-1),['applied',12]);c.release();
 });
+test('the maximum 24 dB setting reaches the movie renderer, while a saved out-of-range 36 dB never reaches native',async()=>{
+ const {c,p,calls}=await setup();c.configureLoudnessGain(24);
+ await c.playUrl('https://media.test/max-gain.m3u8',{});p.state='prepared';p.listeners.get('stateChange')('prepared');await flush();
+ assert.deepEqual(calls.slice(0,2),[['gain',24],['play']]);
+ c.configureLoudnessGain(36);await c.playUrl('https://media.test/invalid-saved-gain.m3u8',{});
+ p.state='prepared';p.listeners.get('stateChange')('prepared');await flush();
+ assert.deepEqual(calls.slice(-2),[['gain',0],['play']]);assert.equal(calls.some(([name,value])=>name==='gain'&&value===36),false);c.release();
+});

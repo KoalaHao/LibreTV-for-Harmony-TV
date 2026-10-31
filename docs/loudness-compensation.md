@@ -1,6 +1,6 @@
 # 影片声音补偿
 
-播放器控制条的“声音补偿”按钮依次选择：关闭（0 dB）、+6 dB、+12 dB，再回到关闭。使用公开的 [AVPlayer.setLoudnessGain](https://github.com/openharmony/docs/blob/master/zh-cn/application-dev/reference/apis-media-kit/arkts-apis-media-AVPlayer.md#setloudnessgain21)（API 21 起），音频渲染用途设置为 MOVIE。
+播放器控制条的“声音补偿”按钮依次选择：关闭（0 dB）、+12 dB、+24 dB，再回到关闭。使用公开的 [AVPlayer.setLoudnessGain](https://github.com/openharmony/docs/blob/master/zh-cn/application-dev/reference/apis-media-kit/arkts-apis-media-AVPlayer.md#setloudnessgain21)（API 21 起），音频渲染用途设置为 MOVIE。官方允许范围为 -90 至 +24 dB，不提供超出范围的 +36 dB 档。
 
 这是当前 AVPlayer 的响度增益，不写系统媒体音量，也不把普通 setVolume 的 100% 当成额外放大。按钮在命令已下发、未收到拒绝后保存选择；原生 Promise 未完成时标为“已请求”，不把它当成可听效果或输出增益的确认。当前音频通路明确拒绝时显示暂不可用，并回退当前影片的选择。公开接口不支持高清音频通路，具体能否应用依赖系统服务与音频路由。
 
@@ -21,3 +21,9 @@ Mate TV 实测发现可选增益请求可能一直不返回。现在先发出增
 tv.27 仍等待最多一秒让 Promise / error 报告结果，但没有响应只记为“已请求”，不再自动退回上一档。因此同一影片可以继续选择 +6 / +12 / 关，并保存当前选择。明确的 Promise 拒绝、同步异常或响度 error 会回退；迟到的失败也会更正 UI 与观看记录，旧源的 Promise 不能改写新源。服务死亡等其他媒体错误继续交给播放器错误处理，不当成可忽略的增益错误。此兼容不替换视频解码器，也不改系统媒体音量。
 
 本地回归加入永不完成的原生 Promise、连续切档、迟到拒绝、迟到响度 error、其他媒体错误与换源隔离；实际声音是否放大仍须在 Mate TV 做同一片段对照，不能以按钮文字或原生命令已提交代替。
+
+2026-10-31 tv.27 实机已走通关 → +6 → +12 → 关，视频服务保持 PLAYER_STARTED，用户确认声音有变化。这是用户听感证据，未测量扬声器输出的实际 dB。电视点播控制条中的收藏、分享、全屏方向与投屏按钮也已移除并取得原生截图。
+
+## tv.28 增大档位
+
+按用户要求改为关 / +12 / +24，控制器与观看记录均接受 +24 dB。旧的 +6 dB 记录保留原值，避免升级时自动提高其他影片的声音；从旧 +6 档点击后进入 +12，再进入 +24 和关。非法 +36 dB 记录读取为关闭，不把超范围数值发往系统。150 项本地测试包含最高档起播、持久化重新读取及非法档位隔离，新增档位与记忆的实机验证待完成。

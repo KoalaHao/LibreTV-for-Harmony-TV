@@ -2153,7 +2153,7 @@ export struct PlayerPage {
     if (this.loudnessBusy || !this.hasStarted || this.released) return;
     const sourceKey = this.sourceKey;
     const vodId = this.vodId;
-    const gain = this.loudnessGainDb === 0 ? 6 : (this.loudnessGainDb === 6 ? 12 : 0);
+    const gain = this.loudnessGainDb < 12 ? 12 : (this.loudnessGainDb === 12 ? 24 : 0);
     this.loudnessBusy = true;
     const accepted = await this.player.setLoudnessGain(gain);
     if (this.released || this.sourceKey !== sourceKey || this.vodId !== vodId) return;
@@ -2548,7 +2548,7 @@ export struct PlayerPage {
                     .borderRadius(14).height(30).padding({ left: 11, right: 11 })
                     .textAlign(TextAlign.Center).focusable(true).focusBox(TV_FOCUS)
                     .enabled(!this.loudnessBusy && this.hasStarted && this.errorText === '' && this.sourceKey !== '' && this.vodId !== '')
-                    .accessibilityText('当前片源影片的' + this.loudnessLabel() + '，点击依次选择关闭、加六分贝、加十二分贝')
+                    .accessibilityText('当前片源影片的' + this.loudnessLabel() + '，点击依次选择关闭、加十二分贝、加二十四分贝')
                     .onClick(() => { this.cycleLoudness(); })
                   if (DevicePolicy.isTV()) {
                     Text(this.qualityBusy ? '鸿鹄画质 · 切换中' : ('鸿鹄画质 · ' + (this.qualityEnabled ? '开' : '关')))

@@ -348,7 +348,7 @@ export class HistoryStore {
           sourceName: HistoryStore.str(rec['sourceName']),
           episode: HistoryStore.num(rec['episode'], 0),
           lineIndex: HistoryStore.num(rec['lineIndex'], 0),
-          loudnessGainDb: [0, 6, 12].indexOf(HistoryStore.num(rec['loudnessGainDb'], 0)) >= 0 ?
+          loudnessGainDb: [0, 6, 12, 24].indexOf(HistoryStore.num(rec['loudnessGainDb'], 0)) >= 0 ?
             HistoryStore.num(rec['loudnessGainDb'], 0) : 0,
           episodeName: HistoryStore.optStr(rec['episodeName']),
           playUrl: HistoryStore.optStr(rec['playUrl']),

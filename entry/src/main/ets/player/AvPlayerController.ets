@@ -71,7 +71,7 @@ export class AvPlayerController {
     this.loudnessGeneration++;
     this.loudnessRequest = null;
     this.loudnessPending = false;
-    this.loudnessGainDb = [0, 6, 12].indexOf(gainDb) >= 0 ? gainDb : 0;
+    this.loudnessGainDb = [0, 6, 12, 24].indexOf(gainDb) >= 0 ? gainDb : 0;
   }
 
   private currentLoudnessRequest(request: LoudnessRequest): boolean {

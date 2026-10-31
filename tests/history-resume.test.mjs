@@ -31,3 +31,12 @@ test('compensation belongs to its source and title history record and survives o
  store.saveProgress(record('a','2',999));assert.equal(store.getProgress('a','2').loudnessGainDb,0);
  store.clearHistory();assert.equal(store.getProgress('a','1'),null);
 });
+test('24 dB survives storage reload and ordinary updates without increasing legacy six dB records or other sources',()=>{
+ data.clear();const store=HistoryStore.shared();
+ const record=(sourceKey,gain)=>({sourceKey,vodId:'1',name:'影片',sourceName:'源',episode:0,positionMs:5000,durationMs:60000,updatedAt:1,...(gain===undefined?{}:{loudnessGainDb:gain})});
+ store.saveProgress(record('boosted',24));store.saveProgress(record('legacy',6));store.saveProgress(record('other',0));
+ const reload=new HistoryStore();reload.saveProgress(record('boosted'));
+ assert.equal(reload.getProgress('boosted','1').loudnessGainDb,24);
+ assert.equal(reload.getProgress('legacy','1').loudnessGainDb,6);assert.equal(reload.getProgress('other','1').loudnessGainDb,0);
+ store.saveProgress(record('invalid',36));assert.equal(reload.getProgress('invalid','1').loudnessGainDb,0);
+});
