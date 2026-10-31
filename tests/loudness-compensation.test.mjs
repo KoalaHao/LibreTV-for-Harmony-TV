@@ -118,3 +118,11 @@ test('format metadata changes restore gain even if the renderer ID is reused, wh
  p.listeners.get('trackInfoUpdate')([]);await c.setLoudnessGain(0);
  await new Promise(resolve=>setTimeout(resolve,300));assert.deepEqual(calls.at(-1),['gain',0]);assert.equal(calls.length,4);c.release();
 });
+test('a transient rejection while rebuilding the audio sink retries the saved gain without changing playback',async()=>{
+ const {c,p,calls}=await setup();p.state='paused';const states=[];c.onLoudnessState=(s,v)=>states.push([s,v]);
+ await c.setLoudnessGain(24);let attempts=0;
+ p.setLoudnessGain=async v=>{calls.push(['gain',v]);if(++attempts===1)throw Error('renderer not ready');};
+ p.listeners.get('trackInfoUpdate')([]);await new Promise(resolve=>setTimeout(resolve,1150));
+ assert.equal(attempts,2);assert.deepEqual(states.at(-1),['applied',24]);assert.ok(states.some(([s,v])=>s==='recovering'&&v===24));
+ assert.equal(p.state,'paused');assert.equal(calls.some(([s])=>s==='play'),false);c.release();
+});

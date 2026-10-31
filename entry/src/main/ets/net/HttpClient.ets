@@ -17,6 +17,8 @@ export interface HttpResult {
   text: string;
   bytes: Uint8Array;
   error: string;
+  totalBytes?: number;
+  rangeStart?: number;
 }
 
 export class HttpClient {
@@ -52,6 +54,24 @@ export class HttpClient {
     requestHeaders['Range'] = 'bytes=0-16383';
     requestHeaders['Accept-Encoding'] = 'identity';
     return await HttpClient.get(url, requestHeaders, timeoutMs, true, false, 16384);
+  }
+
+  /** Audio PES can follow a large video keyframe; inspect only the final 16 KiB when the prefix has no audio. */
+  static async getAudioSuffix(url: string, headers: Record<string, string>, timeoutMs: number, totalBytes: number): Promise<HttpResult> {
+    if (!Number.isSafeInteger(totalBytes) || totalBytes <= 16384) {
+      return { ok: false, status: 0, text: '', bytes: new Uint8Array(0), error: 'Unknown segment length' };
+    }
+    const start = totalBytes - 16384;
+    const requestHeaders: Record<string, string> = {};
+    for (const key of Object.keys(headers)) requestHeaders[key] = headers[key];
+    requestHeaders['Range'] = 'bytes=' + start + '-' + (totalBytes - 1);
+    requestHeaders['Accept-Encoding'] = 'identity';
+    const result = await HttpClient.get(url, requestHeaders, timeoutMs, true, false, 16384);
+    // A server ignoring suffix ranges must not turn a truncated full response into tail evidence.
+    if (result.status !== 206 || result.rangeStart !== start || result.totalBytes !== totalBytes) {
+      result.ok = false; result.bytes = new Uint8Array(0);
+    }
+    return result;
   }
 
   static async head(url: string, timeoutMs: number = 4000): Promise<HttpResult> {
@@ -188,7 +208,18 @@ export class HttpClient {
         }
       }
       const ok = response.responseCode >= 200 && response.responseCode < 300;
-      return { ok, status: response.responseCode, text, bytes, error: ok ? '' : 'HTTP ' + response.responseCode };
+      let totalBytes = 0; let rangeStart = -1;
+      if (response.header !== undefined && response.header !== null && typeof response.header === 'object') {
+        const fields = response.header as Record<string, string>;
+        for (const name of Object.keys(fields)) {
+          if (name.toLowerCase() !== 'content-range' || typeof fields[name] !== 'string') continue;
+          const range = fields[name].match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+          if (range !== null && Number(range[2]) >= Number(range[1]) && Number(range[3]) > Number(range[2]) &&
+            Number.isSafeInteger(Number(range[3]))) { rangeStart = Number(range[1]); totalBytes = Number(range[3]); }
+        }
+      }
+      return { ok, status: response.responseCode, text, bytes, totalBytes, rangeStart,
+        error: ok ? '' : 'HTTP ' + response.responseCode };
     } catch (e) {
       const err = e as BusinessError;
       return { ok: false, status: 0, text: '', bytes: new Uint8Array(0), error: err.message ?? 'network error' };

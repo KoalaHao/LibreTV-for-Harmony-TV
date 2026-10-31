@@ -346,8 +346,11 @@ export class M3u8Rewriter {
           if (!Number.isInteger(match.start) || !Number.isInteger(match.end) || match.start < 0 || match.end > segs.length || match.start >= match.end) continue;
           for (let i = match.start; i < match.end; i++) {
             dropFlags[i] = true;
-            reasons[i] = '严格规则：短时异分辨率插播（疑似），主样本 ' + match.mainWidth + '×' + match.mainHeight +
-              ' → ' + match.width + '×' + match.height + '，前后各两片恢复主尺寸；整个区间已逐片采样确认';
+            reasons[i] = (match.mainSampleRate || 0) > 0 ?
+              '严格规则：短时异采样率插播（疑似），主音轨 ' + match.mainSampleRate + ' Hz → ' + match.sampleRate +
+                ' Hz，双侧清单边界、异常分片时长、前后各两片恢复主音轨；整个区间已逐片采样确认' :
+              '严格规则：短时异分辨率插播（疑似），主样本 ' + match.mainWidth + '×' + match.mainHeight +
+                ' → ' + match.width + '×' + match.height + '，前后各两片恢复主尺寸；整个区间已逐片采样确认';
           }
         }
       }

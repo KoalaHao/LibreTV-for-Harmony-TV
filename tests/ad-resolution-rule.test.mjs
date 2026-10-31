@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadEts} from './ets-loader.mjs';
 import {filmSps,adSps,baselineSps,tsPrefix} from './helpers/h264-headers.mjs';
+import {audioTsPrefix} from './helpers/aac-headers.mjs';
 const {Utils}=await loadEts('common/Utils.ets');
 const {TsVideoDimensions}=await loadEts('model/TsVideoDimensions.ets');
-globalThis.__resolutionKits={Utils,TsVideoDimensions};
+const {TsAudioSampleRate}=await loadEts('model/TsAudioSampleRate.ets');
+globalThis.__resolutionKits={Utils,TsVideoDimensions,TsAudioSampleRate};
 let calls=[],running=0,peak=0,scenario;
 const http={getVideoPrefix:async(url,headers,timeout)=>{
  calls.push({url,headers,timeout});running++;peak=Math.max(peak,running);
@@ -15,11 +17,14 @@ const http={getVideoPrefix:async(url,headers,timeout)=>{
   if(scenario.fail?.has(index))throw Error('unreachable');
   if(scenario.unknown?.has(index))return {ok:true,bytes:new Uint8Array(564)};
   const sps=scenario.dimensions?.get(index)??(index>=scenario.start&&index<scenario.end?scenario.ad:scenario.film);
-  return {ok:true,bytes:tsPrefix(sps)};
+  const video=tsPrefix(sps);
+  const rate=scenario.unknownAudio?.has(index)?0:(scenario.rates?.get(index)??
+    (index>=scenario.start&&index<scenario.end?scenario.adRate:scenario.filmRate));
+  return {ok:true,bytes:rate?new Uint8Array([...video,...audioTsPrefix(rate)]):video};
  }finally{running--;}
 }};
 globalThis.__resolutionKits.HttpClient=http;
-const {AdResolutionRule:R}=await loadEts('model/AdResolutionRule.ets',[[/^import .*;$/gm,''],[/^/,'const {Utils,TsVideoDimensions,HttpClient}=globalThis.__resolutionKits;\n']]);
+const {AdResolutionRule:R}=await loadEts('model/AdResolutionRule.ets',[[/^import .*;$/gm,''],[/^/,'const {Utils,TsVideoDimensions,TsAudioSampleRate,HttpClient}=globalThis.__resolutionKits;\n']]);
 const {AdDiagnostics}=await loadEts('model/AdDiagnostics.ets',[[/^import .*;$/gm,''],[/^/,'const {Utils}=globalThis.__resolutionKits;\n']]);
 globalThis.__resolutionRewriter={Utils,AdDiagnostics,AdResolutionRule:R};
 const {M3u8Rewriter:M}=await loadEts('model/M3u8Rewriter.ets',[[/^import .*;$/gm,''],[/^/,'const {Utils,AdDiagnostics,AdResolutionRule}=globalThis.__resolutionRewriter;\n']]);
@@ -31,7 +36,7 @@ function setup(options={}){
  const lines=['#EXTM3U','#EXT-X-TARGETDURATION:9',...(options.tags||[])];
  for(let i=0;i<scenario.count;i++){
   if(options.discs!==false&&(i%6===0||i===scenario.start||i===scenario.start+3||i===scenario.end))lines.push('#EXT-X-DISCONTINUITY');
-  const dur=i>=scenario.start&&i<scenario.end?(durations[(i-scenario.start)%5]):4.171;
+  const dur=i>=scenario.start&&i<scenario.end?(options.insertDuration??durations[(i-scenario.start)%5]):4.171;
   lines.push(`#EXTINF:${dur},`,`${i}.ts?auth=fixture`);
  }
  lines.push('#EXT-X-ENDLIST');return {text:lines.join('\n'),base:domain+'index.m3u8'};
@@ -115,4 +120,22 @@ test('the same playlist keeps its first analysis when later metadata becomes ava
  const p=setup({unknown:new Set([20])});const first=await inspect(p);assert.deepEqual(first.matches,[]);
  const before=calls.length;scenario.unknown.clear();assert.deepEqual((await inspect(p)).matches,[]);assert.equal(calls.length,before);
  p.text+='\n';assert.equal((await inspect(p)).matches.length,1);
+});
+test('same-resolution short insertions with uncommon durations and a temporary AAC rate change are removed as a complete run',async()=>{
+ const p=setup({ad:filmSps,filmRate:48000,adRate:44100}),result=await M.analyzeMediaPlaylist(p.text,p.base,'strict',{});
+ assert.deepEqual(result.trace.segments.filter(s=>s.reason.includes('异采样率')).map(s=>s.index),[19,20,21,22,23]);
+ assert.equal(result.filteredCount,5);assert.match(result.trace.segments[18].reason,/48000 Hz → 44100 Hz/);
+ for(const i of [16,17,23,24])assert.equal(result.trace.segments[i].dropped,false);
+});
+test('a normal 44.1 kHz film and an incomplete or unrecovered audio rate change never add audio cuts',async()=>{
+ for(const options of [{filmRate:44100,adRate:44100},{filmRate:48000,adRate:44100,unknownAudio:new Set([20])},
+  {filmRate:48000,adRate:44100,rates:new Map([[24,44100]])},{filmRate:48000,adRate:44100,discs:false},
+  {filmRate:48000,adRate:44100,insertDuration:4.171}]){
+  const p=setup({ad:filmSps,...options});assert.deepEqual((await inspect(p)).matches,[]);
+ }
+});
+test('the new audio rule requires seven consistent main anchors and excludes long changes',async()=>{
+ let p=setup({ad:filmSps,filmRate:48000,adRate:44100,rates:new Map([[3,32000],[10,32000],[30,32000]])});
+ assert.deepEqual((await inspect(p)).matches,[]);
+ p=setup({ad:filmSps,filmRate:48000,adRate:44100,start:18,end:38});assert.deepEqual((await inspect(p)).matches,[]);
 });

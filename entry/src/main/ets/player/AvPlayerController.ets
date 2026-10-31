@@ -33,6 +33,8 @@ interface LoudnessRequest {
   gainDb: number;
   failed: boolean;
   state: string;
+  restoreReason: string;
+  restoreAttempt: number;
 }
 
 export class AvPlayerController {
@@ -78,7 +80,7 @@ export class AvPlayerController {
   onLoudnessState: (state: string, gainDb: number) => void = () => {};
 
   /** HLS format changes can replace the audio sink without another prepared event. */
-  private scheduleLoudnessRestore(reason: string): void {
+  private scheduleLoudnessRestore(reason: string, attempt: number = 0): void {
     const player = this.player;
     if (player === null || this.loudnessGainDb <= 0 ||
       ['prepared', 'playing', 'paused'].indexOf(player.state) < 0) return;
@@ -90,8 +92,8 @@ export class AvPlayerController {
       if (this.player !== player || source !== this.sourceGeneration || request !== this.loudnessGeneration ||
         this.loudnessGainDb <= 0) return;
       console.info('[player] ' + reason + '; restoring loudness ' + this.loudnessGainDb + ' dB');
-      this.setLoudnessGain(this.loudnessGainDb);
-    }, 250);
+      this.setLoudnessGain(this.loudnessGainDb, reason, attempt);
+    }, [250, 750, 1500][Math.min(2, attempt)]);
   }
 
   private movieRendererSignature(infos: audio.AudioRendererChangeInfoArray): string {
@@ -141,11 +143,14 @@ export class AvPlayerController {
     request.failed = true;
     request.state = 'unavailable';
     this.loudnessGainDb = request.previousDb;
-    this.onLoudnessState('unavailable', request.previousDb);
+    if (request.restoreReason !== '' && request.restoreAttempt < 2 && request.previousDb > 0) {
+      this.onLoudnessState('recovering', request.previousDb);
+      this.scheduleLoudnessRestore(request.restoreReason, request.restoreAttempt + 1);
+    } else this.onLoudnessState('unavailable', request.previousDb);
   }
 
   /** Returns whether the request was accepted; requested is distinct from a fulfilled native Promise. */
-  setLoudnessGain(gainDb: number): Promise<boolean> {
+  setLoudnessGain(gainDb: number, restoreReason: string = '', restoreAttempt: number = 0): Promise<boolean> {
     const previous = this.loudnessGainDb;
     this.configureLoudnessGain(gainDb);
     const generation = this.loudnessGeneration;
@@ -157,7 +162,7 @@ export class AvPlayerController {
         sourceGeneration !== this.sourceGeneration) return false;
       if (['prepared', 'playing', 'paused', 'completed', 'stopped'].indexOf(player.state) < 0) return false;
       const request: LoudnessRequest = { player, generation, sourceGeneration, previousDb: previous,
-        gainDb: value, failed: false, state: 'applying' };
+        gainDb: value, failed: false, state: 'applying', restoreReason, restoreAttempt };
       this.loudnessRequest = request;
       this.loudnessPending = true;
       this.onLoudnessState('applying', value);

@@ -2167,7 +2167,7 @@ export struct PlayerPage {
               }, (mode: string) => mode)
             }.width('100%')
             Text(this.offlineDir !== '' ? '离线视频不重新过滤' :
-              (this.adFilterSelection === 'strict' ? '额外检查短时异常分辨率片段，加载可能稍慢。' :
+              (this.adFilterSelection === 'strict' ? '额外检查短时分辨率或音轨采样率突变，加载可能稍慢。' :
                 (this.adFilterSelection === 'off' ? '保留全部原始分片。' : '过滤明确广告特征，优先保持播放稳定。')))
               .fontSize(13).fontColor('#B3C3D9').width('100%')
             Button(this.adFilterBusy ? '正在应用…' : '应用到当前播放')
@@ -2221,6 +2221,7 @@ export struct PlayerPage {
   }
 
   private loudnessLabel(): string {
+    if (this.loudnessState === 'recovering') return '声音补偿 +' + this.loudnessGainDb + ' dB · 恢复中';
     if (this.loudnessBusy || this.loudnessState === 'applying') return '声音补偿 · 设置中';
     if (this.loudnessState === 'unavailable') return '声音补偿 · 暂不可用';
     if (this.loudnessState === 'requested' && this.loudnessGainDb > 0) {
